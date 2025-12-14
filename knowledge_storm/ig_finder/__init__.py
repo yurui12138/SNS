@@ -27,8 +27,23 @@ from .engine import (
     IGFinderArguments,
 )
 
+# IG-Finder 2.0 imports
+from .engine_v2 import (
+    IGFinder2Runner,
+    IGFinder2Arguments,
+)
+
+from .dataclass_v2 import (
+    MultiViewBaseline,
+    TaxonomyView,
+    FitVector,
+    FitLabel,
+    FacetLabel,
+    IGFinder2Results,
+)
+
 __all__ = [
-    # Data classes
+    # Data classes (v1)
     "CognitiveBaseline",
     "EvolutionState",
     "InnovationCluster",
@@ -42,8 +57,17 @@ __all__ = [
     "Boundary",
     "Method",
     "Evidence",
-    # Engine classes
+    # Engine classes (v1)
     "IGFinderRunner",
     "IGFinderLMConfigs",
     "IGFinderArguments",
+    # IG-Finder 2.0
+    "IGFinder2Runner",
+    "IGFinder2Arguments",
+    "MultiViewBaseline",
+    "TaxonomyView",
+    "FitVector",
+    "FitLabel",
+    "FacetLabel",
+    "IGFinder2Results",
 ]
