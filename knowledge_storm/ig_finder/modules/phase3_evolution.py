@@ -31,6 +31,8 @@ from ..dataclass_v2 import (
     EvolutionProposal,
     NewNodeProposal,
     EvidenceSpan,
+    ViewReconstructionScore,
+    WritingMode,
 )
 from ..schemas_v2 import (
     create_new_node_generator,
@@ -413,6 +415,98 @@ class EvolutionPlanner:
         
         return proposal
     
+    def compute_all_views_reconstruction(
+        self,
+        clusters: List[StressCluster],
+        baseline: MultiViewBaseline,
+        fit_vectors: List[FitVector],
+        lambda_reg: float = 0.8
+    ) -> List[ViewReconstructionScore]:
+        """
+        Compute reconstruction scores for ALL views.
+        
+        This implements the 'reconstruct-then-select' design principle:
+        For each view, plan evolution operations and calculate:
+        - FitGain: How much stressed papers would improve
+        - Stress: Reduction in average stress score
+        - Coverage: Taxonomy richness (normalized)
+        - EditCost: Total cost of operations
+        
+        Args:
+            clusters: Stress clusters
+            baseline: Multi-view baseline
+            fit_vectors: Original fit vectors
+            lambda_reg: Regularization parameter
+            
+        Returns:
+            List of ViewReconstructionScore for all views
+        """
+        logger.info("Computing reconstruction for all views...")
+        
+        reconstruction_scores = []
+        
+        for view in baseline.views:
+            logger.info(f"  Reconstructing view {view.view_id} ({view.facet_label.value})...")
+            
+            # Plan operations for this view
+            view_operations = []
+            
+            for cluster in clusters:
+                if cluster.cluster_type in [ClusterType.STRONG_SHIFT, ClusterType.FACET_DEPENDENT]:
+                    failure_rate = cluster.view_failure_rates.get(view.view_id, 0.0)
+                    
+                    if failure_rate > 0.6:  # This view struggles with this cluster
+                        # Propose ADD_NODE
+                        add_op = self._propose_add_node(cluster, view, fit_vectors)
+                        if add_op:
+                            view_operations.append(add_op)
+            
+            # Calculate metrics for this view
+            if view_operations:
+                # FitGain: Total improvement from all operations
+                fit_gain = sum(op.fit_gain for op in view_operations)
+                
+                # EditCost: Total cost
+                edit_cost = sum(op.edit_cost for op in view_operations)
+                
+                # Stress reduction: Calculate how much stress would reduce
+                # (Simplified: assume proportional to fit_gain)
+                stress_reduction = fit_gain / max(len(fit_vectors), 1) * 0.3
+                
+            else:
+                # No operations needed - view is already good
+                fit_gain = 0.0
+                edit_cost = 0.0
+                stress_reduction = 0.0
+            
+            # Coverage: Taxonomy richness (normalized by max leaves = 50)
+            num_leaves = len(view.tree.get_leaf_nodes())
+            coverage = min(1.0, num_leaves / 50.0)
+            
+            # Create score object (combined_score computed in __init__)
+            score = ViewReconstructionScore(
+                view_id=view.view_id,
+                facet_label=view.facet_label,
+                fit_gain=fit_gain,
+                stress_reduction=stress_reduction,
+                coverage=coverage,
+                edit_cost=edit_cost
+            )
+            
+            reconstruction_scores.append(score)
+            
+            logger.info(f"    FitGain={fit_gain:.3f}, Stress={stress_reduction:.3f}, "
+                       f"Coverage={coverage:.3f}, EditCost={edit_cost:.3f}, "
+                       f"CombinedScore={score.combined_score:.3f}")
+        
+        # Sort by combined score (highest first)
+        reconstruction_scores.sort(key=lambda s: s.combined_score, reverse=True)
+        
+        logger.info(f"Reconstruction complete. Best view: {reconstruction_scores[0].view_id} "
+                   f"(score={reconstruction_scores[0].combined_score:.3f})")
+        
+        return reconstruction_scores
+    
     def _propose_add_node(
         self,
         cluster: StressCluster,
@@ -596,4 +690,31 @@ class Phase3Pipeline:
         logger.info(f"Phase 3 completed: {len(clusters)} clusters, {len(proposal.operations)} operations")
         logger.info("="*80)
         
+        return clusters, proposal
+    
+    def compute_reconstruction_scores(
+        self,
+        clusters: List[StressCluster],
+        baseline: MultiViewBaseline,
+        fit_vectors: List[FitVector]
+    ) -> List[ViewReconstructionScore]:
+        """
+        Compute reconstruction scores for all views.
+        
+        This is the key method for Phase 4's 'reconstruct-then-select' approach.
+        
+        Args:
+            clusters: Stress clusters from Phase 3
+            baseline: Multi-view baseline
+            fit_vectors: Fit vectors from Phase 2
+            
+        Returns:
+            List of ViewReconstructionScore sorted by combined score
+        """
+        return self.planner.compute_all_views_reconstruction(
+            clusters,
+            baseline,
+            fit_vectors,
+            lambda_reg=self.lambda_reg
+        )
         return clusters, proposal

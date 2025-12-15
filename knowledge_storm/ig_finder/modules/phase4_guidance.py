@@ -21,6 +21,9 @@ from ..dataclass_v2 import (
     Subsection,
     EvidenceCard,
     EvolutionSummaryItem,
+    ViewReconstructionScore,
+    WritingMode,
+    WritingRules,
 )
 
 logger = logging.getLogger(__name__)
@@ -30,12 +33,81 @@ class AxisSelector:
     """
     Selects main and auxiliary axes for organizing the survey.
     
-    Main axis: Most stable and broadly applicable
-    Aux axis: Best discriminator for stress clusters
+    NEW DESIGN (reconstruct-then-select):
+    - Main axis: Selected based on reconstruction scores (FitGain, Stress, Coverage, EditCost)
+    - Writing mode: Determined by reconstruction analysis (DELTA_FIRST vs ANCHOR_PLUS_DELTA)
+    - Aux axis: Best discriminator for stress clusters
     """
     
     def __init__(self):
         pass
+    
+    def select_main_axis_with_mode(
+        self,
+        reconstruction_scores: List[ViewReconstructionScore],
+        baseline: MultiViewBaseline
+    ) -> Tuple[TaxonomyView, WritingMode]:
+        """
+        Select main axis and determine writing mode based on reconstruction scores.
+        
+        This implements the 'reconstruct-then-select' design principle:
+        1. Use reconstruction_scores (already sorted by combined score)
+        2. Pick the best view as main axis
+        3. Determine writing mode based on edit cost and fit gain
+        
+        Writing Mode Rules:
+        - DELTA_FIRST: If best view needs heavy reconstruction (EditCost > 3.0 or FitGain > 10.0)
+        - ANCHOR_PLUS_DELTA: If best view is relatively stable (low EditCost, moderate FitGain)
+        
+        Args:
+            reconstruction_scores: Sorted reconstruction scores from Phase 3
+            baseline: Multi-view baseline
+            
+        Returns:
+            Tuple of (selected_main_axis_view, writing_mode)
+        """
+        from ..dataclass_v2 import WritingMode
+        
+        logger.info("Selecting main axis with writing mode (reconstruct-then-select)...")
+        
+        if not reconstruction_scores:
+            # Fallback: use first view
+            logger.warning("No reconstruction scores provided, falling back to first view")
+            main_axis = baseline.views[0]
+            return main_axis, WritingMode.ANCHOR_PLUS_DELTA
+        
+        # Best view is already at index 0 (sorted by combined_score in Phase 3)
+        best_score = reconstruction_scores[0]
+        
+        # Find corresponding view
+        main_axis = baseline.get_view_by_id(best_score.view_id)
+        if not main_axis:
+            logger.error(f"View {best_score.view_id} not found in baseline")
+            main_axis = baseline.views[0]
+        
+        # Determine writing mode based on reconstruction needs
+        # Delta-first: Heavy reconstruction needed (structure collapsed)
+        # Anchor+Delta: Light reconstruction (structure is stable)
+        
+        if best_score.edit_cost > 3.0 or best_score.fit_gain > 10.0:
+            # Significant reconstruction needed -> Delta-first mode
+            mode = WritingMode.DELTA_FIRST
+            mode_rationale = f"Heavy reconstruction (EditCost={best_score.edit_cost:.1f}, FitGain={best_score.fit_gain:.1f})"
+        else:
+            # Stable structure -> Anchor+Delta mode
+            mode = WritingMode.ANCHOR_PLUS_DELTA
+            mode_rationale = f"Stable structure (EditCost={best_score.edit_cost:.1f}, FitGain={best_score.fit_gain:.1f})"
+        
+        logger.info(f"Selected main axis: {main_axis.view_id} ({main_axis.facet_label.value})")
+        logger.info(f"  Reconstruction metrics:")
+        logger.info(f"    FitGain: {best_score.fit_gain:.3f}")
+        logger.info(f"    StressReduction: {best_score.stress_reduction:.3f}")
+        logger.info(f"    Coverage: {best_score.coverage:.3f}")
+        logger.info(f"    EditCost: {best_score.edit_cost:.3f}")
+        logger.info(f"    CombinedScore: {best_score.combined_score:.3f}")
+        logger.info(f"Writing mode: {mode.value} - {mode_rationale}")
+        
+        return main_axis, mode
     
     def select_main_axis(
         self,
@@ -43,18 +115,13 @@ class AxisSelector:
         fit_vectors: List[FitVector]
     ) -> TaxonomyView:
         """
-        Select main axis based on FIT rate, stability, and coverage.
+        DEPRECATED: Use select_main_axis_with_mode() instead.
         
-        Formula: score = 0.6 * fit_rate + 0.3 * stability + 0.1 * coverage
-        
-        Args:
-            baseline: Multi-view baseline
-            fit_vectors: All fit vectors
-            
-        Returns:
-            Selected TaxonomyView as main axis
+        This method is kept for backward compatibility but should not be used
+        in the new design. It uses the old logic (FIT rate, stability, coverage)
+        instead of reconstruction scores.
         """
-        logger.info("Selecting main axis...")
+        logger.warning("Using deprecated select_main_axis(). Use select_main_axis_with_mode() instead.")
         
         axis_scores = []
         
@@ -73,7 +140,6 @@ class AxisSelector:
             fit_rate = fit_count / total if total > 0 else 0.0
             
             # Calculate stability (cross-review consistency)
-            # Approximation: count views with same facet
             same_facet_count = sum(
                 1 for v in baseline.views
                 if v.facet_label == view.facet_label
@@ -84,19 +150,13 @@ class AxisSelector:
             num_leaves = len(view.tree.get_leaf_nodes())
             coverage = min(1.0, num_leaves / 50.0)
             
-            # Combined score
+            # Combined score (old formula)
             score = 0.6 * fit_rate + 0.3 * stability + 0.1 * coverage
             
             axis_scores.append((view, score))
-            
-            logger.info(f"  {view.view_id} ({view.facet_label.value}): "
-                       f"fit_rate={fit_rate:.3f}, stability={stability:.3f}, "
-                       f"coverage={coverage:.3f}, score={score:.3f}")
         
         # Select main axis
         main_axis = max(axis_scores, key=lambda x: x[1])[0]
-        
-        logger.info(f"Selected main axis: {main_axis.view_id} ({main_axis.facet_label.value})")
         
         return main_axis
     
@@ -173,32 +233,42 @@ class GuidanceGenerator:
         topic: str,
         main_axis: TaxonomyView,
         aux_axis: Optional[TaxonomyView],
+        main_axis_mode: WritingMode,
+        reconstruction_scores: List[ViewReconstructionScore],
         clusters: List[StressCluster],
         evolution_proposal: EvolutionProposal,
         fit_vectors: List[FitVector],
         papers: List[ResearchPaper]
     ) -> DeltaAwareGuidance:
         """
-        Generate complete delta-aware guidance.
+        Generate complete delta-aware guidance with writing mode and rules.
+        
+        NEW DESIGN: Now includes:
+        - main_axis_mode: Writing mode (DELTA_FIRST vs ANCHOR_PLUS_DELTA)
+        - writing_rules: Executable do/dont constraints
+        - reconstruction_scores: All view scores for transparency
         
         Args:
             topic: Research topic
             main_axis: Main organizational axis
             aux_axis: Auxiliary axis (optional)
+            main_axis_mode: Writing mode determination
+            reconstruction_scores: All view reconstruction scores
             clusters: Stress clusters
             evolution_proposal: Proposed evolution operations
             fit_vectors: All fit vectors
             papers: Research papers
             
         Returns:
-            DeltaAwareGuidance object
+            DeltaAwareGuidance object with all fields
         """
-        logger.info("Generating delta-aware guidance...")
+        logger.info(f"Generating delta-aware guidance (mode: {main_axis_mode.value})...")
         
-        # Generate outline
+        # Generate outline (mode-aware)
         outline = self._generate_outline(
             main_axis,
             aux_axis,
+            main_axis_mode,
             clusters,
             fit_vectors,
             papers
@@ -215,16 +285,27 @@ class GuidanceGenerator:
             evolution_proposal
         )
         
+        # Generate writing rules based on mode
+        writing_rules = self._generate_writing_rules(
+            main_axis_mode,
+            evolution_proposal,
+            clusters
+        )
+        
         guidance = DeltaAwareGuidance(
             topic=topic,
             main_axis=main_axis,
             aux_axis=aux_axis,
+            main_axis_mode=main_axis_mode,
             outline=outline,
             evolution_summary=evolution_summary,
-            must_answer_questions=must_answer
+            must_answer_questions=must_answer,
+            writing_rules=writing_rules,
+            reconstruction_scores=reconstruction_scores
         )
         
-        logger.info(f"Generated guidance with {len(outline)} sections")
+        logger.info(f"Generated guidance with {len(outline)} sections, "
+                   f"{len(writing_rules.do)} do-rules, {len(writing_rules.dont)} dont-rules")
         
         return guidance
     
@@ -232,11 +313,17 @@ class GuidanceGenerator:
         self,
         main_axis: TaxonomyView,
         aux_axis: Optional[TaxonomyView],
+        main_axis_mode: WritingMode,
         clusters: List[StressCluster],
         fit_vectors: List[FitVector],
         papers: List[ResearchPaper]
     ) -> List[Section]:
-        """Generate structured outline."""
+        """
+        Generate structured outline based on writing mode.
+        
+        DELTA_FIRST: Emphasize evolution and stress clusters
+        ANCHOR_PLUS_DELTA: Use existing structure + highlight changes
+        """
         
         outline = []
         
@@ -390,6 +477,75 @@ class GuidanceGenerator:
         
         return relevant
     
+    def _generate_writing_rules(
+        self,
+        main_axis_mode: WritingMode,
+        evolution_proposal: EvolutionProposal,
+        clusters: List[StressCluster]
+    ) -> WritingRules:
+        """
+        Generate executable writing constraints based on writing mode.
+        
+        DELTA_FIRST mode:
+        - DO: Lead with evolution and stress points
+        - DO: Organize by emerging patterns
+        - DONT: Over-rely on existing taxonomy structure
+        
+        ANCHOR_PLUS_DELTA mode:
+        - DO: Use existing structure as foundation
+        - DO: Highlight specific evolution points
+        - DONT: Ignore baseline taxonomy
+        """
+        
+        do_rules = []
+        dont_rules = []
+        
+        if main_axis_mode == WritingMode.DELTA_FIRST:
+            # Delta-first: Emphasize change and evolution
+            do_rules.extend([
+                "Lead with emerging trends and structural shifts",
+                "Organize content primarily by innovation clusters and stress points",
+                "Emphasize papers that don't fit existing taxonomies",
+                f"Address all {len(clusters)} identified stress clusters explicitly",
+                f"Justify all {len(evolution_proposal.operations)} proposed structural changes"
+            ])
+            
+            dont_rules.extend([
+                "Don't force-fit new work into inadequate old categories",
+                "Don't assume existing review structure is still valid",
+                "Don't bury evolution insights in traditional sections"
+            ])
+            
+        else:  # ANCHOR_PLUS_DELTA
+            # Anchor+Delta: Use structure but highlight changes
+            do_rules.extend([
+                "Use main axis structure as the organizational foundation",
+                "Integrate new papers into existing taxonomy where they fit",
+                "Clearly mark and explain structural updates",
+                "Maintain continuity with established review structure",
+                f"Call out {len(clusters)} specific areas needing attention" if clusters else "Maintain comprehensive coverage"
+            ])
+            
+            dont_rules.extend([
+                "Don't ignore evolution and stress points",
+                "Don't present the taxonomy as static or complete",
+                "Don't omit discussion of structural limitations"
+            ])
+        
+        # Common rules for both modes
+        do_rules.extend([
+            "Provide evidence for all major claims",
+            "Cite specific papers with page numbers where possible",
+            "Answer all must-answer questions explicitly"
+        ])
+        
+        dont_rules.extend([
+            "Don't make unsupported generalizations",
+            "Don't cite papers without reading them"
+        ])
+        
+        return WritingRules(do=do_rules, dont=dont_rules)
+    
     def _generate_evolution_summary(
         self,
         proposal: EvolutionProposal
@@ -463,10 +619,17 @@ class Phase4Pipeline:
         fit_vectors: List[FitVector],
         papers: List[ResearchPaper],
         clusters: List[StressCluster],
-        evolution_proposal: EvolutionProposal
+        evolution_proposal: EvolutionProposal,
+        reconstruction_scores: List[ViewReconstructionScore]
     ) -> DeltaAwareGuidance:
         """
-        Run complete Phase 4 pipeline.
+        Run complete Phase 4 pipeline with reconstruction-based axis selection.
+        
+        NEW DESIGN (reconstruct-then-select):
+        1. Use reconstruction_scores from Phase 3 to select main axis
+        2. Determine writing mode (DELTA_FIRST vs ANCHOR_PLUS_DELTA)
+        3. Select auxiliary axis for cross-organization
+        4. Generate guidance with mode-specific writing rules
         
         Args:
             topic: Research topic
@@ -475,28 +638,34 @@ class Phase4Pipeline:
             papers: Research papers
             clusters: Stress clusters from Phase 3
             evolution_proposal: Evolution proposal from Phase 3
+            reconstruction_scores: View reconstruction scores from Phase 3
             
         Returns:
-            DeltaAwareGuidance object
+            DeltaAwareGuidance object with all fields
         """
         logger.info("="*80)
-        logger.info("PHASE 4: Delta-aware Guidance Generation")
+        logger.info("PHASE 4: Delta-aware Guidance Generation (reconstruct-then-select)")
         logger.info("="*80)
         
-        # Step 1: Select main axis
-        logger.info("Step 1: Selecting main axis...")
-        main_axis = self.axis_selector.select_main_axis(baseline, fit_vectors)
+        # Step 1: Select main axis AND determine writing mode (NEW DESIGN)
+        logger.info("Step 1: Selecting main axis with writing mode...")
+        main_axis, main_axis_mode = self.axis_selector.select_main_axis_with_mode(
+            reconstruction_scores,
+            baseline
+        )
         
         # Step 2: Select aux axis
         logger.info("Step 2: Selecting auxiliary axis...")
         aux_axis = self.axis_selector.select_aux_axis(baseline, clusters, main_axis)
         
-        # Step 3: Generate guidance
+        # Step 3: Generate guidance (NEW: includes mode and writing rules)
         logger.info("Step 3: Generating delta-aware guidance...")
         guidance = self.guidance_generator.generate_guidance(
             topic=topic,
             main_axis=main_axis,
             aux_axis=aux_axis,
+            main_axis_mode=main_axis_mode,
+            reconstruction_scores=reconstruction_scores,
             clusters=clusters,
             evolution_proposal=evolution_proposal,
             fit_vectors=fit_vectors,
@@ -504,6 +673,9 @@ class Phase4Pipeline:
         )
         
         logger.info("Phase 4 completed successfully!")
+        logger.info(f"  Writing mode: {main_axis_mode.value}")
+        logger.info(f"  Main axis: {main_axis.view_id} ({main_axis.facet_label.value})")
+        logger.info(f"  Aux axis: {aux_axis.view_id if aux_axis else 'None'}")
         logger.info("="*80)
         
         return guidance
