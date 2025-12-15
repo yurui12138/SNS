@@ -504,7 +504,49 @@ class MultiViewBaselineBuilder:
         logger.info(f"Multi-view baseline created with {len(baseline.views)} views")
         logger.info(f"View weights: {[f'{v.view_id}={v.weight:.3f}' for v in baseline.views]}")
         
+        # Quality gate: Check baseline quality
+        self._check_baseline_quality(baseline)
+        
         return baseline
+    
+    def _check_baseline_quality(self, baseline: MultiViewBaseline) -> None:
+        """
+        Check baseline quality and issue warnings if quality is low.
+        
+        Quality checks from design spec:
+        1. Minimum unique facets: Should have at least 2 different facets
+        2. Dominant facet ratio: No single facet should dominate (>60%)
+        
+        If quality is low, log warnings (in production, could trigger compensatory view induction).
+        """
+        from collections import Counter
+        
+        # Count facets
+        facet_counts = Counter([v.facet_label for v in baseline.views])
+        num_unique_facets = len(facet_counts)
+        
+        logger.info(f"Baseline quality check:")
+        logger.info(f"  Unique facets: {num_unique_facets}")
+        logger.info(f"  Facet distribution: {dict(facet_counts)}")
+        
+        # Check 1: Minimum unique facets
+        if num_unique_facets < 2:
+            logger.warning(f"⚠️  QUALITY GATE WARNING: Only {num_unique_facets} unique facets found (minimum: 2)")
+            logger.warning("   Consider retrieving more diverse reviews or inducing additional views")
+        
+        # Check 2: Dominant facet ratio
+        if baseline.views:
+            for facet, count in facet_counts.items():
+                ratio = count / len(baseline.views)
+                if ratio > 0.6:
+                    logger.warning(f"⚠️  QUALITY GATE WARNING: Facet {facet.value} dominates with {ratio:.1%} of views")
+                    logger.warning("   Consider balancing view diversity or inducing compensatory views")
+        
+        # Summary
+        if num_unique_facets >= 2 and all(count / len(baseline.views) <= 0.6 for count in facet_counts.values()):
+            logger.info("  ✓ Baseline quality check passed")
+        else:
+            logger.warning("  ✗ Baseline quality check identified issues (see warnings above)")
     
     def _calculate_weight(self, review: Information, view: TaxonomyView) -> float:
         """

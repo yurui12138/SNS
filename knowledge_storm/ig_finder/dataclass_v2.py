@@ -705,6 +705,100 @@ class EvolutionProposal:
 # Phase 4: Delta-aware Guidance Data Structures
 # ============================================================================
 
+class WritingMode(Enum):
+    """
+    Writing mode for organizing the survey based on reconstruction analysis.
+    
+    DELTA_FIRST: Organize primarily by stress/evolution (when main axis collapses badly)
+    ANCHOR_PLUS_DELTA: Use main axis structure + highlight evolution (when main axis is stable)
+    """
+    DELTA_FIRST = "DELTA_FIRST"
+    ANCHOR_PLUS_DELTA = "ANCHOR_PLUS_DELTA"
+
+
+@dataclass
+class ViewReconstructionScore:
+    """
+    Scores for a view after reconstruction with stress clusters.
+    
+    Used to determine optimal main axis and writing mode.
+    """
+    view_id: str
+    facet_label: FacetLabel
+    fit_gain: float  # How much stress papers would improve
+    stress_reduction: float  # Reduction in average stress score
+    coverage: float  # Coverage of taxonomy (normalized by max leaves)
+    edit_cost: float  # Total edit cost of operations needed
+    combined_score: float  # α·FitGain + β·Stress + γ·Coverage - λ·EditCost
+    
+    # Weights for combined score (from design spec)
+    ALPHA = 0.4  # Weight for FitGain
+    BETA = 0.3   # Weight for Stress reduction
+    GAMMA = 0.2  # Weight for Coverage
+    LAMBDA = 0.1 # Weight for EditCost penalty
+    
+    def __init__(self, view_id: str, facet_label: FacetLabel, 
+                 fit_gain: float, stress_reduction: float, 
+                 coverage: float, edit_cost: float):
+        self.view_id = view_id
+        self.facet_label = facet_label
+        self.fit_gain = fit_gain
+        self.stress_reduction = stress_reduction
+        self.coverage = coverage
+        self.edit_cost = edit_cost
+        # Calculate combined score
+        self.combined_score = (
+            self.ALPHA * fit_gain + 
+            self.BETA * stress_reduction + 
+            self.GAMMA * coverage - 
+            self.LAMBDA * edit_cost
+        )
+    
+    def to_dict(self) -> Dict:
+        return {
+            "view_id": self.view_id,
+            "facet_label": self.facet_label.value,
+            "fit_gain": self.fit_gain,
+            "stress_reduction": self.stress_reduction,
+            "coverage": self.coverage,
+            "edit_cost": self.edit_cost,
+            "combined_score": self.combined_score,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> ViewReconstructionScore:
+        return cls(
+            view_id=data["view_id"],
+            facet_label=FacetLabel(data["facet_label"]),
+            fit_gain=data["fit_gain"],
+            stress_reduction=data["stress_reduction"],
+            coverage=data["coverage"],
+            edit_cost=data["edit_cost"],
+        )
+
+
+@dataclass
+class WritingRules:
+    """
+    Executable writing constraints based on writing mode.
+    """
+    do: List[str]  # Things the writer MUST do
+    dont: List[str]  # Things the writer MUST NOT do
+    
+    def to_dict(self) -> Dict:
+        return {
+            "do": self.do,
+            "dont": self.dont,
+        }
+    
+    @classmethod
+    def from_dict(cls, data: Dict) -> WritingRules:
+        return cls(
+            do=data.get("do", []),
+            dont=data.get("dont", []),
+        )
+
+
 @dataclass
 class EvidenceCard:
     """
@@ -822,13 +916,21 @@ class EvolutionSummaryItem:
 class DeltaAwareGuidance:
     """
     Complete delta-aware writing guidance for downstream survey generation.
+    
+    This class now includes:
+    - main_axis_mode: Writing mode (DELTA_FIRST vs ANCHOR_PLUS_DELTA)
+    - writing_rules: Executable do/dont constraints
+    - reconstruction_scores: All view scores for transparency
     """
     topic: str
     main_axis: TaxonomyView  # Selected main axis
     aux_axis: Optional[TaxonomyView]  # Selected auxiliary axis (if any)
+    main_axis_mode: WritingMode  # NEW: Writing mode determination
     outline: List[Section]  # Structured outline with evidence
     evolution_summary: List[EvolutionSummaryItem]  # Summary of structure updates
     must_answer_questions: List[str]  # Overall questions the survey must address
+    writing_rules: WritingRules  # NEW: Executable writing constraints
+    reconstruction_scores: List[ViewReconstructionScore] = field(default_factory=list)  # NEW: All view scores
     generation_date: datetime = field(default_factory=datetime.now)
     
     def to_dict(self) -> Dict:
@@ -836,9 +938,12 @@ class DeltaAwareGuidance:
             "topic": self.topic,
             "main_axis": self.main_axis.to_dict(),
             "aux_axis": self.aux_axis.to_dict() if self.aux_axis else None,
+            "main_axis_mode": self.main_axis_mode.value,
             "outline": [s.to_dict() for s in self.outline],
             "evolution_summary": [es.to_dict() for es in self.evolution_summary],
             "must_answer_questions": self.must_answer_questions,
+            "writing_rules": self.writing_rules.to_dict(),
+            "reconstruction_scores": [rs.to_dict() for rs in self.reconstruction_scores],
             "generation_date": self.generation_date.isoformat(),
         }
     
@@ -848,10 +953,14 @@ class DeltaAwareGuidance:
             topic=data["topic"],
             main_axis=TaxonomyView.from_dict(data["main_axis"]),
             aux_axis=TaxonomyView.from_dict(data["aux_axis"]) if data.get("aux_axis") else None,
+            main_axis_mode=WritingMode(data.get("main_axis_mode", "ANCHOR_PLUS_DELTA")),
             outline=[Section.from_dict(s) for s in data["outline"]],
             evolution_summary=[EvolutionSummaryItem.from_dict(es) 
                              for es in data["evolution_summary"]],
             must_answer_questions=data["must_answer_questions"],
+            writing_rules=WritingRules.from_dict(data.get("writing_rules", {"do": [], "dont": []})),
+            reconstruction_scores=[ViewReconstructionScore.from_dict(rs) 
+                                  for rs in data.get("reconstruction_scores", [])],
             generation_date=datetime.fromisoformat(data.get("generation_date", 
                                                            datetime.now().isoformat())),
         )
