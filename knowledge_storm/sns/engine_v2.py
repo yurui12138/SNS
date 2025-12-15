@@ -282,6 +282,10 @@ class SNSRunner:
         )
         
         # Save final results
+        # Validate results quality and output warnings
+        self._validate_results()
+        
+        # Save all results to disk
         self._save_results()
         
         logger.info("="*80)
@@ -416,6 +420,97 @@ class SNSRunner:
             "avg_stress_score": sum(fv.stress_score for fv in self.fit_vectors) / total_papers if total_papers > 0 else 0.0,
             "avg_unfittable_score": sum(fv.unfittable_score for fv in self.fit_vectors) / total_papers if total_papers > 0 else 0.0,
         }
+    
+    def _validate_results(self):
+        """
+        Validate results quality and output warnings.
+        
+        This helps identify potential issues with the pipeline configuration
+        or input data quality.
+        """
+        if not self.results:
+            return
+        
+        logger.info("\n" + "="*80)
+        logger.info("QUALITY VALIDATION")
+        logger.info("="*80 + "\n")
+        
+        # Check 1: Fit rate
+        total_tests = sum(len(fv.fit_reports) for fv in self.fit_vectors)
+        fit_count = sum(1 for fv in self.fit_vectors for fr in fv.fit_reports if fr.label == FitLabel.FIT)
+        unfittable_count = sum(1 for fv in self.fit_vectors for fr in fv.fit_reports if fr.label == FitLabel.UNFITTABLE)
+        
+        fit_rate = fit_count / total_tests if total_tests > 0 else 0.0
+        unfittable_rate = unfittable_count / total_tests if total_tests > 0 else 0.0
+        
+        logger.info(f"Fit Rate Analysis:")
+        logger.info(f"  FIT: {fit_count}/{total_tests} ({fit_rate:.1%})")
+        logger.info(f"  UNFITTABLE: {unfittable_count}/{total_tests} ({unfittable_rate:.1%})")
+        
+        if fit_rate < 0.1:
+            logger.warning(f"\n⚠️  WARNING: Very low fit rate: {fit_rate:.1%}")
+            logger.warning("  Possible causes:")
+            logger.warning("  - Embedding model quality (check 'embedding_model' parameter)")
+            logger.warning("  - NodeDefinition quality (review extraction might have failed)")
+            logger.warning("  - Baseline diversity (may need more review papers)")
+            logger.warning("  - FitScore thresholds too strict")
+            logger.warning("\n  Recommendations:")
+            logger.warning("  1. Ensure embedding_model='allenai/specter2' (not 'dummy')")
+            logger.warning("  2. Increase top_k_reviews parameter (e.g., 15+)")
+            logger.warning("  3. Review NodeDefinition quality in multiview_baseline.json")
+        elif unfittable_rate > 0.8:
+            logger.warning(f"\n⚠️  WARNING: High unfittable rate: {unfittable_rate:.1%}")
+            logger.warning("  This suggests most papers don't fit existing taxonomy")
+            logger.warning("  Consider using DELTA_FIRST writing mode")
+        
+        # Check 2: Cluster count
+        cluster_count = len(self.stress_clusters) if self.stress_clusters else 0
+        logger.info(f"\nStress Cluster Analysis:")
+        logger.info(f"  Clusters formed: {cluster_count}")
+        
+        if cluster_count == 0:
+            logger.warning("\n⚠️  WARNING: No stress clusters formed")
+            logger.warning("  Possible causes:")
+            logger.warning("  - Too few stressed papers (need at least 5-10)")
+            logger.warning("  - min_cluster_size too large")
+            logger.warning("  - Papers too dissimilar (no clear failure patterns)")
+            logger.warning("\n  Recommendations:")
+            logger.warning("  1. Increase top_k_research_papers (e.g., 30+)")
+            logger.warning("  2. Decrease min_cluster_size (try 2)")
+            logger.warning("  3. Check if papers are from the same research area")
+        
+        # Check 3: Baseline quality
+        unique_facets = len(set(v.facet_label for v in self.baseline.views)) if self.baseline else 0
+        total_views = len(self.baseline.views) if self.baseline else 0
+        total_leaf_nodes = sum(len(v.tree.get_leaf_nodes()) for v in self.baseline.views) if self.baseline else 0
+        
+        logger.info(f"\nBaseline Quality Analysis:")
+        logger.info(f"  Total views: {total_views}")
+        logger.info(f"  Unique facets: {unique_facets}")
+        logger.info(f"  Total leaf nodes: {total_leaf_nodes}")
+        
+        if unique_facets < 2:
+            logger.warning(f"\n⚠️  WARNING: Only {unique_facets} unique facets in baseline")
+            logger.warning("  Multi-view baseline should have diverse perspectives")
+            logger.warning("  Recommendation: Increase top_k_reviews parameter (e.g., 15+)")
+        
+        if total_leaf_nodes < 20:
+            logger.warning(f"\n⚠️  WARNING: Only {total_leaf_nodes} leaf nodes in taxonomy")
+            logger.warning("  Baseline taxonomy may be too coarse-grained")
+            logger.warning("  Recommendation: Review extraction may have failed, check LLM responses")
+        
+        # Check 4: Evolution proposal
+        if self.evolution_proposal:
+            operations_count = len(self.evolution_proposal.operations) if self.evolution_proposal.operations else 0
+            logger.info(f"\nEvolution Proposal Analysis:")
+            logger.info(f"  Operations proposed: {operations_count}")
+            
+            if operations_count == 0 and unfittable_rate > 0.5:
+                logger.warning(f"\n⚠️  WARNING: No evolution operations proposed despite {unfittable_rate:.1%} unfittable rate")
+                logger.warning("  Phase 3 may have failed to identify structural changes")
+                logger.warning("  Recommendation: Check stress clustering parameters")
+        
+        logger.info("\n" + "="*80 + "\n")
     
     def _save_results(self):
         """Save final results to disk."""

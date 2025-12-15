@@ -45,13 +45,13 @@ def main():
     parser.add_argument(
         '--top-k-reviews',
         type=int,
-        default=5,
+        default=15,  # Increased from 5 for better baseline quality
         help='Number of review papers to retrieve'
     )
     parser.add_argument(
         '--top-k-research',
         type=int,
-        default=10,
+        default=30,  # Increased from 10 for better clustering
         help='Number of research papers to retrieve'
     )
     parser.add_argument(
@@ -122,7 +122,7 @@ def main():
         top_k_research_papers=args.top_k_research,
         min_cluster_size=2,
         save_intermediate_results=True,
-        embedding_model="dummy",  # Using simple embedding for demo
+        embedding_model="allenai/specter2",  # Using SPECTER2 for better semantic similarity
         lambda_regularization=0.8,
     )
     
@@ -143,8 +143,8 @@ def main():
         results = runner.run(
             do_phase1=True,
             do_phase2=True,
-            do_phase3=False,  # Not yet implemented
-            do_phase4=False,  # Not yet implemented
+            do_phase3=True,  # Phase 3: Stress clustering & evolution
+            do_phase4=True,  # Phase 4: Delta-aware guidance generation
         )
         
         # Print summary

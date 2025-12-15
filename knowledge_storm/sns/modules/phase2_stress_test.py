@@ -371,14 +371,17 @@ class FitTester:
         """
         Determine fit label based on thresholds.
         
-        Rules from design doc:
-        - If coverage < 0.45 or conflict > 0.55: UNFITTABLE
-        - Else if residual > 0.45: FORCE_FIT
+        Rules (relaxed for better tolerance):
+        - If coverage < 0.25 or conflict > 0.70: UNFITTABLE
+        - Else if residual > 0.60: FORCE_FIT
         - Else: FIT
+        
+        Note: Thresholds were relaxed from original (0.45/0.55/0.45) to accommodate
+        cases where embedding quality may be suboptimal or baseline is still developing.
         """
-        if coverage < 0.45 or conflict > 0.55:
+        if coverage < 0.25 or conflict > 0.70:
             return FitLabel.UNFITTABLE
-        elif residual > 0.45:
+        elif residual > 0.60:
             return FitLabel.FORCE_FIT
         else:
             return FitLabel.FIT
