@@ -1,16 +1,20 @@
 """
-Embedding and similarity computation infrastructure.
+Embedding and similarity computation infrastructure - API-based version.
 
-Provides unified interface for different embedding models:
-- SPECTER2 for scientific papers
-- SciNCL for cross-encoder reranking
-- Sentence-BERT for general text
+This module uses API calls instead of local models to avoid GPU requirements.
+Supports OpenAI, Azure, and other embedding API providers.
+
+Key Design:
+1. OpenAIEmbedding: Uses text-embedding-ada-002 or text-embedding-3-small
+2. FallbackEmbedding: TF-IDF based (no GPU required)
+3. Hybrid similarity: Combines semantic + lexical matching
 """
 import logging
 import numpy as np
 from typing import List, Optional, Union, Dict
 from abc import ABC, abstractmethod
-import os
+from collections import Counter
+import math
 
 try:
     import litellm
@@ -20,19 +24,11 @@ except ImportError:
     logging.warning("litellm not available. Install with: pip install litellm")
 
 try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
+    from sklearn.feature_extraction.text import TfidfVectorizer
+    SKLEARN_AVAILABLE = True
 except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    logging.warning("sentence-transformers not available. Install with: pip install sentence-transformers")
-
-try:
-    from transformers import AutoTokenizer, AutoModel
-    import torch
-    TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    TRANSFORMERS_AVAILABLE = False
-    logging.warning("transformers not available. Install with: pip install transformers torch")
+    SKLEARN_AVAILABLE = False
+    logging.warning("sklearn not available. Install with: pip install scikit-learn")
 
 logger = logging.getLogger(__name__)
 
@@ -53,45 +49,65 @@ class EmbeddingModel(ABC):
     def batch_similarity(self, query_embeddings: np.ndarray, candidate_embeddings: np.ndarray) -> np.ndarray:
         """Compute pairwise similarities between query and candidate embeddings."""
         # Cosine similarity by default
-        return np.dot(query_embeddings, candidate_embeddings.T) / (
-            np.linalg.norm(query_embeddings, axis=1, keepdims=True) *
-            np.linalg.norm(candidate_embeddings, axis=1, keepdims=True).T
-        )
+        if len(query_embeddings.shape) == 1:
+            query_embeddings = query_embeddings.reshape(1, -1)
+        if len(candidate_embeddings.shape) == 1:
+            candidate_embeddings = candidate_embeddings.reshape(1, -1)
+        
+        # Normalize
+        query_norm = query_embeddings / (np.linalg.norm(query_embeddings, axis=1, keepdims=True) + 1e-8)
+        candidate_norm = candidate_embeddings / (np.linalg.norm(candidate_embeddings, axis=1, keepdims=True) + 1e-8)
+        
+        return np.dot(query_norm, candidate_norm.T)
 
 
-class SPECTER2Embedding(EmbeddingModel):
+class OpenAIEmbedding(EmbeddingModel):
     """
-    SPECTER2 embedding model for scientific papers.
+    OpenAI API-based embedding model.
     
-    Uses allenai/specter2_base for encoding scientific abstracts/titles.
-    Optimized for semantic similarity in research papers.
+    Uses text-embedding-ada-002 or text-embedding-3-small/large.
+    No GPU required - all computation on API side.
     """
     
-    def __init__(self, model_name: str = "allenai/specter2_base", device: str = "cpu"):
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("sentence-transformers is required for SPECTER2. "
-                            "Install with: pip install sentence-transformers")
-        
-        self.model_name = model_name
-        self.device = device
-        logger.info(f"Loading SPECTER2 model: {model_name}")
-        
-        try:
-            self.model = SentenceTransformer(model_name, device=device)
-            logger.info("SPECTER2 model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load SPECTER2 model: {e}")
-            logger.info("Falling back to sentence-transformers/all-MiniLM-L6-v2")
-            self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
-    
-    def encode(self, texts: List[str], batch_size: int = 32, show_progress: bool = False) -> np.ndarray:
+    def __init__(
+        self, 
+        model: str = "text-embedding-ada-002",
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        dimensions: Optional[int] = None
+    ):
         """
-        Encode texts to embeddings.
+        Initialize OpenAI embedding model.
         
         Args:
-            texts: List of text strings (titles, abstracts, or combined)
-            batch_size: Batch size for encoding
-            show_progress: Show progress bar
+            model: Model name (text-embedding-ada-002, text-embedding-3-small, text-embedding-3-large)
+            api_key: OpenAI API key (or set OPENAI_API_KEY env var)
+            api_base: Custom API base URL (for Azure or proxy)
+            dimensions: Output dimensions (only for text-embedding-3-* models)
+        """
+        if not LITELLM_AVAILABLE:
+            raise ImportError("litellm is required for OpenAI embeddings. "
+                            "Install with: pip install litellm")
+        
+        self.model = model
+        self.api_key = api_key
+        self.api_base = api_base
+        self.dimensions = dimensions
+        
+        # Validate model and dimensions
+        if dimensions and not model.startswith("text-embedding-3"):
+            logger.warning(f"dimensions parameter only supported for text-embedding-3-* models, ignoring")
+            self.dimensions = None
+        
+        logger.info(f"Initialized OpenAI embedding model: {model}")
+    
+    def encode(self, texts: List[str], batch_size: int = 100, **kwargs) -> np.ndarray:
+        """
+        Encode texts to embeddings via OpenAI API.
+        
+        Args:
+            texts: List of text strings
+            batch_size: Batch size (OpenAI supports up to 2048 inputs per request)
             
         Returns:
             numpy array of shape (len(texts), embedding_dim)
@@ -99,294 +115,263 @@ class SPECTER2Embedding(EmbeddingModel):
         if not texts:
             return np.array([])
         
-        embeddings = self.model.encode(
-            texts,
-            batch_size=batch_size,
-            show_progress_bar=show_progress,
-            convert_to_numpy=True
-        )
+        # Filter empty texts
+        valid_texts = [t if t.strip() else " " for t in texts]
         
-        return embeddings
+        all_embeddings = []
+        
+        # Process in batches
+        for i in range(0, len(valid_texts), batch_size):
+            batch = valid_texts[i:i+batch_size]
+            
+            try:
+                # Use litellm for API call
+                response = litellm.embedding(
+                    model=self.model,
+                    input=batch,
+                    api_key=self.api_key,
+                    api_base=self.api_base,
+                    dimensions=self.dimensions
+                )
+                
+                # Extract embeddings
+                batch_embeddings = [item['embedding'] for item in response['data']]
+                all_embeddings.extend(batch_embeddings)
+                
+            except Exception as e:
+                logger.error(f"Error encoding batch {i//batch_size + 1}: {e}")
+                # Return zero embeddings for failed batch
+                dim = 1536 if self.model == "text-embedding-ada-002" else (self.dimensions or 1536)
+                all_embeddings.extend([[0.0] * dim] * len(batch))
+        
+        return np.array(all_embeddings)
     
     def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """Compute cosine similarity between two embeddings."""
         return float(np.dot(embedding1, embedding2) / (
-            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2) + 1e-8
         ))
 
 
-class SciNCLEmbedding(EmbeddingModel):
+class AzureOpenAIEmbedding(OpenAIEmbedding):
     """
-    SciNCL embedding model for scientific literature.
+    Azure OpenAI API-based embedding model.
     
-    Alternative to SPECTER2, optimized for citation recommendation
-    and semantic search in academic papers.
+    Wrapper for Azure-specific configuration.
     """
     
-    def __init__(self, model_name: str = "malteos/scincl", device: str = "cpu"):
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("sentence-transformers is required for SciNCL. "
-                            "Install with: pip install sentence-transformers")
+    def __init__(
+        self,
+        deployment_name: str,
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None,
+        api_version: str = "2023-05-15"
+    ):
+        """
+        Initialize Azure OpenAI embedding model.
         
-        self.model_name = model_name
-        self.device = device
-        logger.info(f"Loading SciNCL model: {model_name}")
-        
-        try:
-            self.model = SentenceTransformer(model_name, device=device)
-            logger.info("SciNCL model loaded successfully")
-        except Exception as e:
-            logger.error(f"Failed to load SciNCL model: {e}")
-            logger.info("Falling back to sentence-transformers/all-MiniLM-L6-v2")
-            self.model = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2", device=device)
-    
-    def encode(self, texts: List[str], batch_size: int = 32, show_progress: bool = False) -> np.ndarray:
-        """Encode texts to embeddings."""
-        if not texts:
-            return np.array([])
-        
-        embeddings = self.model.encode(
-            texts,
-            batch_size=batch_size,
-            show_progress_bar=show_progress,
-            convert_to_numpy=True
+        Args:
+            deployment_name: Azure deployment name
+            api_key: Azure API key (or set AZURE_OPENAI_API_KEY env var)
+            api_base: Azure API base URL (or set AZURE_OPENAI_ENDPOINT env var)
+            api_version: API version
+        """
+        # Azure uses deployment name as model
+        super().__init__(
+            model=f"azure/{deployment_name}",
+            api_key=api_key,
+            api_base=api_base
         )
-        
-        return embeddings
-    
-    def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        """Compute cosine similarity between two embeddings."""
-        return float(np.dot(embedding1, embedding2) / (
-            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
-        ))
-
-
-class SentenceBERTEmbedding(EmbeddingModel):
-    """
-    General-purpose Sentence-BERT embedding.
-    
-    Fast and efficient for general semantic similarity tasks.
-    Good fallback when domain-specific models are not available.
-    """
-    
-    def __init__(self, model_name: str = "sentence-transformers/all-MiniLM-L6-v2", device: str = "cpu"):
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            raise ImportError("sentence-transformers is required. "
-                            "Install with: pip install sentence-transformers")
-        
-        self.model_name = model_name
-        self.device = device
-        logger.info(f"Loading Sentence-BERT model: {model_name}")
-        
-        self.model = SentenceTransformer(model_name, device=device)
-        logger.info("Sentence-BERT model loaded successfully")
-    
-    def encode(self, texts: List[str], batch_size: int = 32, show_progress: bool = False) -> np.ndarray:
-        """Encode texts to embeddings."""
-        if not texts:
-            return np.array([])
-        
-        embeddings = self.model.encode(
-            texts,
-            batch_size=batch_size,
-            show_progress_bar=show_progress,
-            convert_to_numpy=True
-        )
-        
-        return embeddings
-    
-    def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
-        """Compute cosine similarity between two embeddings."""
-        return float(np.dot(embedding1, embedding2) / (
-            np.linalg.norm(embedding1) * np.linalg.norm(embedding2)
-        ))
+        self.api_version = api_version
+        logger.info(f"Initialized Azure OpenAI embedding: {deployment_name}")
 
 
 class FallbackEmbedding(EmbeddingModel):
     """
-    Fallback embedding using simple TF-IDF.
+    TF-IDF based fallback embedding (no GPU required).
     
-    Used when no neural embedding models are available.
+    Uses sklearn TfidfVectorizer for text vectorization.
+    Suitable for when API is unavailable or for testing.
     """
     
-    def __init__(self):
-        logger.warning("Using fallback TF-IDF embedding (no neural models available)")
-        self.vocab: Optional[Dict[str, int]] = None
-        self.idf: Optional[np.ndarray] = None
+    def __init__(self, max_features: int = 1000):
+        """
+        Initialize TF-IDF embedding.
+        
+        Args:
+            max_features: Maximum number of features
+        """
+        if not SKLEARN_AVAILABLE:
+            raise ImportError("scikit-learn is required for FallbackEmbedding. "
+                            "Install with: pip install scikit-learn")
+        
+        self.max_features = max_features
+        self.vectorizer = None
+        logger.info(f"Initialized TF-IDF fallback embedding (max_features={max_features})")
     
-    def _build_vocab(self, texts: List[str]):
-        """Build vocabulary and IDF from texts."""
-        from collections import Counter
-        import math
+    def encode(self, texts: List[str], fit: bool = False, **kwargs) -> np.ndarray:
+        """
+        Encode texts to TF-IDF vectors.
         
-        # Build vocabulary
-        word_counts = Counter()
-        doc_counts = Counter()
-        
-        for text in texts:
-            words = text.lower().split()
-            word_counts.update(words)
-            doc_counts.update(set(words))
-        
-        # Create vocab
-        vocab_list = [word for word, _ in word_counts.most_common(5000)]
-        self.vocab = {word: i for i, word in enumerate(vocab_list)}
-        
-        # Calculate IDF
-        n_docs = len(texts)
-        self.idf = np.array([
-            math.log(n_docs / (doc_counts.get(word, 0) + 1))
-            for word in vocab_list
-        ])
-    
-    def encode(self, texts: List[str], **kwargs) -> np.ndarray:
-        """Encode texts using TF-IDF."""
+        Args:
+            texts: List of text strings
+            fit: Whether to fit the vectorizer (first time only)
+            
+        Returns:
+            numpy array of shape (len(texts), max_features)
+        """
         if not texts:
             return np.array([])
         
-        # Build vocab if first time
-        if self.vocab is None:
-            self._build_vocab(texts)
+        # Initialize vectorizer if needed
+        if self.vectorizer is None or fit:
+            self.vectorizer = TfidfVectorizer(
+                max_features=self.max_features,
+                stop_words='english',
+                ngram_range=(1, 2)
+            )
+            embeddings = self.vectorizer.fit_transform(texts).toarray()
+        else:
+            embeddings = self.vectorizer.transform(texts).toarray()
         
-        # Create TF-IDF vectors
-        vectors = []
-        for text in texts:
-            words = text.lower().split()
-            vec = np.zeros(len(self.vocab))
-            
-            for word in words:
-                if word in self.vocab:
-                    idx = self.vocab[word]
-                    vec[idx] += 1
-            
-            # Apply IDF
-            vec = vec * self.idf
-            
-            # Normalize
-            norm = np.linalg.norm(vec)
-            if norm > 0:
-                vec = vec / norm
-            
-            vectors.append(vec)
-        
-        return np.array(vectors)
+        return embeddings
     
     def similarity(self, embedding1: np.ndarray, embedding2: np.ndarray) -> float:
         """Compute cosine similarity."""
         return float(np.dot(embedding1, embedding2) / (
-            np.linalg.norm(embedding1) * np.linalg.norm(embedding2) + 1e-10
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2) + 1e-8
         ))
 
-
-def create_embedding_model(
-    model_type: str = "specter2",
-    model_name: Optional[str] = None,
-    device: str = "cpu"
-) -> EmbeddingModel:
-    """
-    Factory function to create embedding model.
-    
-    Args:
-        model_type: Type of model ('specter2', 'scincl', 'sbert', 'fallback')
-        model_name: Optional custom model name
-        device: Device to run model on ('cpu' or 'cuda')
-        
-    Returns:
-        EmbeddingModel instance
-    """
-    if not SENTENCE_TRANSFORMERS_AVAILABLE and model_type != "fallback":
-        logger.warning("sentence-transformers not available, using fallback")
-        model_type = "fallback"
-    
-    if model_type == "specter2":
-        model_name = model_name or "allenai/specter2_base"
-        return SPECTER2Embedding(model_name, device)
-    
-    elif model_type == "scincl":
-        model_name = model_name or "malteos/scincl"
-        return SciNCLEmbedding(model_name, device)
-    
-    elif model_type == "sbert":
-        model_name = model_name or "sentence-transformers/all-MiniLM-L6-v2"
-        return SentenceBERTEmbedding(model_name, device)
-    
-    elif model_type == "fallback":
-        return FallbackEmbedding()
-    
-    else:
-        raise ValueError(f"Unknown model_type: {model_type}")
-
-
-# ============================================================================
-# Hybrid Similarity Computation
-# ============================================================================
 
 def compute_hybrid_similarity(
     text1: str,
     text2: str,
-    embedding_model: EmbeddingModel,
+    embedding1: Optional[np.ndarray] = None,
+    embedding2: Optional[np.ndarray] = None,
+    embedding_model: Optional[EmbeddingModel] = None,
     semantic_weight: float = 0.7,
     lexical_weight: float = 0.3
 ) -> float:
     """
     Compute hybrid similarity combining semantic and lexical matching.
     
-    Formula from design doc: Coverage = 0.7 * semantic + 0.3 * lexical
-    
     Args:
-        text1: First text
-        text2: Second text
-        embedding_model: Embedding model for semantic similarity
-        semantic_weight: Weight for semantic similarity (default 0.7)
-        lexical_weight: Weight for lexical similarity (default 0.3)
+        text1, text2: Input texts
+        embedding1, embedding2: Pre-computed embeddings (optional)
+        embedding_model: Model for computing embeddings if not provided
+        semantic_weight: Weight for semantic similarity (0-1)
+        lexical_weight: Weight for lexical similarity (0-1)
         
     Returns:
-        Hybrid similarity score in [0, 1]
+        Combined similarity score (0-1)
     """
     # Semantic similarity
-    emb1 = embedding_model.encode([text1])[0]
-    emb2 = embedding_model.encode([text2])[0]
-    semantic_sim = embedding_model.similarity(emb1, emb2)
+    if embedding1 is not None and embedding2 is not None:
+        semantic_sim = float(np.dot(embedding1, embedding2) / (
+            np.linalg.norm(embedding1) * np.linalg.norm(embedding2) + 1e-8
+        ))
+    elif embedding_model is not None:
+        embs = embedding_model.encode([text1, text2])
+        semantic_sim = float(np.dot(embs[0], embs[1]) / (
+            np.linalg.norm(embs[0]) * np.linalg.norm(embs[1]) + 1e-8
+        ))
+    else:
+        semantic_sim = 0.0
     
     # Lexical similarity (Jaccard)
-    words1 = set(text1.lower().split())
-    words2 = set(text2.lower().split())
+    tokens1 = set(text1.lower().split())
+    tokens2 = set(text2.lower().split())
     
-    if not words1 or not words2:
+    if not tokens1 or not tokens2:
         lexical_sim = 0.0
     else:
-        intersection = len(words1 & words2)
-        union = len(words1 | words2)
+        intersection = len(tokens1 & tokens2)
+        union = len(tokens1 | tokens2)
         lexical_sim = intersection / union if union > 0 else 0.0
     
-    # Combined score
-    hybrid_score = semantic_weight * semantic_sim + lexical_weight * lexical_sim
+    # Combine
+    combined = semantic_weight * semantic_sim + lexical_weight * lexical_sim
     
-    return float(np.clip(hybrid_score, 0.0, 1.0))
+    return combined
 
 
 def compute_top_k_matches(
     query_embedding: np.ndarray,
     candidate_embeddings: np.ndarray,
-    k: int = 5
-) -> List[int]:
+    candidate_texts: List[str],
+    query_text: str = "",
+    top_k: int = 5,
+    semantic_weight: float = 0.7,
+    lexical_weight: float = 0.3
+) -> List[tuple]:
     """
-    Find top-K most similar candidates to query.
+    Find top-k most similar candidates using hybrid similarity.
     
     Args:
-        query_embedding: Query embedding (1D array)
-        candidate_embeddings: Candidate embeddings (2D array, shape [n_candidates, dim])
-        k: Number of top matches to return
+        query_embedding: Query embedding vector
+        candidate_embeddings: Candidate embedding matrix
+        candidate_texts: Candidate text strings
+        query_text: Query text (for lexical matching)
+        top_k: Number of results to return
+        semantic_weight: Weight for semantic similarity
+        lexical_weight: Weight for lexical similarity
         
     Returns:
-        List of indices of top-K candidates
+        List of (index, similarity_score) tuples, sorted by score
     """
-    # Compute similarities
-    similarities = np.dot(candidate_embeddings, query_embedding) / (
-        np.linalg.norm(candidate_embeddings, axis=1) * np.linalg.norm(query_embedding)
-    )
+    # Compute semantic similarities
+    query_norm = query_embedding / (np.linalg.norm(query_embedding) + 1e-8)
+    candidate_norm = candidate_embeddings / (np.linalg.norm(candidate_embeddings, axis=1, keepdims=True) + 1e-8)
+    semantic_sims = np.dot(candidate_norm, query_norm)
     
-    # Get top-K
-    top_k_indices = np.argsort(similarities)[::-1][:k]
+    # Compute hybrid scores
+    hybrid_scores = []
+    for i, (candidate_text, semantic_sim) in enumerate(zip(candidate_texts, semantic_sims)):
+        if query_text and lexical_weight > 0:
+            # Add lexical similarity
+            tokens_q = set(query_text.lower().split())
+            tokens_c = set(candidate_text.lower().split())
+            
+            if tokens_q and tokens_c:
+                intersection = len(tokens_q & tokens_c)
+                union = len(tokens_q | tokens_c)
+                lexical_sim = intersection / union if union > 0 else 0.0
+            else:
+                lexical_sim = 0.0
+            
+            hybrid_score = semantic_weight * semantic_sim + lexical_weight * lexical_sim
+        else:
+            hybrid_score = semantic_sim
+        
+        hybrid_scores.append((i, float(hybrid_score)))
     
-    return top_k_indices.tolist()
+    # Sort by score
+    hybrid_scores.sort(key=lambda x: x[1], reverse=True)
+    
+    return hybrid_scores[:top_k]
+
+
+def create_embedding_model(
+    model_type: str = "openai",
+    model_name: str = "text-embedding-ada-002",
+    **kwargs
+) -> EmbeddingModel:
+    """
+    Factory function to create embedding models.
+    
+    Args:
+        model_type: Type of model ("openai", "azure", "fallback")
+        model_name: Specific model name
+        **kwargs: Additional arguments for model initialization
+        
+    Returns:
+        EmbeddingModel instance
+    """
+    if model_type == "openai":
+        return OpenAIEmbedding(model=model_name, **kwargs)
+    elif model_type == "azure":
+        return AzureOpenAIEmbedding(deployment_name=model_name, **kwargs)
+    elif model_type == "fallback":
+        return FallbackEmbedding(**kwargs)
+    else:
+        raise ValueError(f"Unknown model_type: {model_type}")

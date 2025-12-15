@@ -143,23 +143,42 @@ class EmbeddingBasedRetriever:
     """
     Retrieves top-K candidate leaf nodes using embedding similarity.
     
-    Uses real embedding models (SPECTER2, SciNCL, or fallback).
+    Uses API-based embedding models (OpenAI, Azure, or TF-IDF fallback).
+    No GPU required - all computation on API side.
     """
     
-    def __init__(self, embedding_model_name: str = "specter2"):
-        self.model_name = embedding_model_name
-        logger.info(f"Initializing EmbeddingBasedRetriever with {embedding_model_name}")
+    def __init__(
+        self,
+        embedding_model_type: str = "openai",
+        embedding_model_name: str = "text-embedding-ada-002",
+        api_key: Optional[str] = None,
+        api_base: Optional[str] = None
+    ):
+        """
+        Initialize retriever with API-based embeddings.
         
-        # Load real embedding model
+        Args:
+            embedding_model_type: "openai", "azure", or "fallback"
+            embedding_model_name: Specific model name or deployment
+            api_key: API key (or set via environment variable)
+            api_base: Custom API base URL
+        """
+        self.model_type = embedding_model_type
+        self.model_name = embedding_model_name
+        logger.info(f"Initializing EmbeddingBasedRetriever with {embedding_model_type}/{embedding_model_name}")
+        
+        # Load API-based embedding model
         try:
             self.embedder = create_embedding_model(
-                model_type=embedding_model_name,
-                device="cpu"  # Can be configured to use GPU
+                model_type=embedding_model_type,
+                model_name=embedding_model_name,
+                api_key=api_key,
+                api_base=api_base
             )
-            logger.info(f"Successfully loaded {embedding_model_name} embedding model")
+            logger.info(f"Successfully initialized {embedding_model_type} embedding model")
         except Exception as e:
-            logger.warning(f"Failed to load {embedding_model_name}, using fallback: {e}")
-            self.embedder = create_embedding_model(model_type="fallback", device="cpu")
+            logger.warning(f"Failed to initialize {embedding_model_type}, using TF-IDF fallback: {e}")
+            self.embedder = create_embedding_model(model_type="fallback")
     
     def retrieve_candidates(
         self, 
@@ -246,21 +265,42 @@ class FitTester:
     Implements Coverage / Conflict / Residual scoring from design doc.
     """
     
-    def __init__(self, retriever: EmbeddingBasedRetriever, nli_model=None):
+    def __init__(
+        self,
+        retriever: EmbeddingBasedRetriever,
+        nli_model=None,
+        nli_model_type: str = "llm",
+        nli_llm_model: str = "gpt-3.5-turbo",
+        nli_api_key: Optional[str] = None,
+        nli_api_base: Optional[str] = None
+    ):
+        """
+        Initialize FitTester with API-based NLI.
+        
+        Args:
+            retriever: Embedding-based retriever
+            nli_model: Pre-initialized NLI model (optional)
+            nli_model_type: "llm" or "rule-based"
+            nli_llm_model: LLM model name if using LLM
+            nli_api_key: API key for NLI LLM
+            nli_api_base: Custom API base for NLI LLM
+        """
         self.retriever = retriever
         
         # Initialize NLI model for conflict detection
         if nli_model is None:
-            logger.info("Initializing NLI model for conflict detection")
+            logger.info(f"Initializing NLI model for conflict detection: {nli_model_type}")
             try:
                 self.nli_model = create_nli_model(
-                    model_type="deberta",
-                    device="cpu"  # Can be configured to use GPU
+                    model_type=nli_model_type,
+                    llm_model=nli_llm_model,
+                    api_key=nli_api_key,
+                    api_base=nli_api_base
                 )
-                logger.info("Successfully loaded DeBERTa-MNLI model")
+                logger.info(f"Successfully initialized {nli_model_type} NLI model")
             except Exception as e:
-                logger.warning(f"Failed to load NLI model: {e}, using fallback")
-                self.nli_model = create_nli_model(model_type="fallback")
+                logger.warning(f"Failed to initialize NLI model: {e}, using rule-based fallback")
+                self.nli_model = create_nli_model(model_type="rule-based")
         else:
             self.nli_model = nli_model
     
@@ -605,19 +645,61 @@ class MultiViewStressTester:
 class Phase2Pipeline:
     """
     Complete Phase 2 pipeline: Multi-view Stress Test.
+    
+    Uses API-based embeddings and NLI (no GPU required).
     """
     
-    def __init__(self, lm, embedding_model: str = "specter2", nli_model_type: str = "deberta"):
-        self.claim_extractor = PaperClaimExtractor(lm)
-        self.retriever = EmbeddingBasedRetriever(embedding_model)
+    def __init__(
+        self,
+        lm,
+        # Embedding configuration (API-based)
+        embedding_model_type: str = "openai",
+        embedding_model_name: str = "text-embedding-ada-002",
+        embedding_api_key: Optional[str] = None,
+        embedding_api_base: Optional[str] = None,
+        # NLI configuration (LLM-based or rule-based)
+        nli_model_type: str = "llm",
+        nli_llm_model: str = "gpt-3.5-turbo",
+        nli_api_key: Optional[str] = None,
+        nli_api_base: Optional[str] = None
+    ):
+        """
+        Initialize Phase 2 pipeline with API-based models.
         
-        # Initialize NLI model
+        Args:
+            lm: DSPy language model for claim extraction
+            embedding_model_type: "openai", "azure", or "fallback"
+            embedding_model_name: Model name or deployment
+            embedding_api_key: API key for embeddings
+            embedding_api_base: Custom API base for embeddings
+            nli_model_type: "llm" or "rule-based"
+            nli_llm_model: LLM model name for NLI
+            nli_api_key: API key for NLI
+            nli_api_base: Custom API base for NLI
+        """
+        self.claim_extractor = PaperClaimExtractor(lm)
+        
+        # Initialize API-based retriever
+        self.retriever = EmbeddingBasedRetriever(
+            embedding_model_type=embedding_model_type,
+            embedding_model_name=embedding_model_name,
+            api_key=embedding_api_key,
+            api_base=embedding_api_base
+        )
+        
+        # Initialize API-based NLI model
         logger.info(f"Initializing NLI model: {nli_model_type}")
         try:
-            nli_model = create_nli_model(model_type=nli_model_type, device="cpu")
+            nli_model = create_nli_model(
+                model_type=nli_model_type,
+                llm_model=nli_llm_model,
+                api_key=nli_api_key,
+                api_base=nli_api_base
+            )
+            logger.info(f"Successfully initialized {nli_model_type} NLI model")
         except Exception as e:
-            logger.warning(f"Failed to load NLI model, using fallback: {e}")
-            nli_model = None
+            logger.warning(f"Failed to initialize NLI model, using rule-based fallback: {e}")
+            nli_model = create_nli_model(model_type="rule-based")
         
         self.stress_tester = MultiViewStressTester(self.retriever, nli_model)
     
