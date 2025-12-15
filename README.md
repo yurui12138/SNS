@@ -205,13 +205,35 @@ print(f"Writing mode: {results.delta_aware_guidance.main_axis_mode.value}")
 
 ### Output Files
 
-SNS generates:
+SNS generates two primary outputs and several intermediate files:
+
+#### 📊 Primary Outputs (Required)
+
+1. **`audit_report.md`** - Human-readable audit report
+   - Executive summary of Self-Nonself analysis
+   - Detailed statistics and visualizations
+   - Multi-view baseline description
+   - Stress test results with evidence
+   - Evolution proposals with justifications
+   - **Purpose**: For researchers to understand the analysis
+
+2. **`guidance_pack.json`** - Machine-readable guidance pack
+   - Structured taxonomy (main_axis, aux_axis)
+   - Writing mode determination (DELTA_FIRST vs ANCHOR_PLUS_DELTA)
+   - Executable writing rules (do/dont constraints)
+   - Structured outline with evidence cards
+   - Evolution summary with operations
+   - Must-answer questions
+   - **Purpose**: For downstream automated survey generation systems
+
+#### 📁 Intermediate Files (Optional, for debugging)
+
 - `multiview_baseline.json`: Self model (taxonomy atlas)
 - `fit_vectors.json`: Nonself identification results
 - `stress_clusters.json`: Clustered structural failures
 - `evolution_proposal.json`: Proposed adaptations
-- `delta_guidance.json`: Writing guidance with executable constraints
-- `sns_report.md`: Human-readable markdown report
+- `delta_guidance.json`: Complete DeltaAwareGuidance object
+- `sns_results.json`: Complete results bundle
 
 ---
 
@@ -430,6 +452,97 @@ DeltaAwareGuidance(
     reconstruction_scores: List[Score],    # NEW: Full transparency
 )
 ```
+
+### Guidance Pack Format
+
+The **`guidance_pack.json`** is the primary machine-readable output for downstream systems:
+
+```json
+{
+  "topic": "deepfake detection",
+  "generation_date": "2025-12-15T10:30:00",
+  "schema_version": "2.0",
+  
+  // Writing strategy
+  "writing_mode": "DELTA_FIRST",  // or "ANCHOR_PLUS_DELTA"
+  "writing_rules": {
+    "do": [
+      "Lead with emerging trends and structural shifts",
+      "Organize by innovation clusters and stress points"
+    ],
+    "dont": [
+      "Don't force-fit new work into inadequate categories"
+    ]
+  },
+  
+  // Taxonomy structure (with evolution applied)
+  "taxonomy": {
+    "main_axis": {
+      "facet": "DETECTION_METHOD",
+      "tree": { /* full tree structure */ },
+      "weight": 0.35
+    },
+    "aux_axis": { /* optional */ }
+  },
+  
+  // Structured outline with constraints
+  "outline": [
+    {
+      "section": "Emerging Detection Methods",
+      "subsections": [
+        {
+          "subsection": "Deep Learning Approaches",
+          "required_nodes": ["/detection_method/deep_learning"],
+          "required_citations": ["Smith2024", "Jones2023"],
+          "must_answer": ["What are the latest architectures?"],
+          "evidence_cards": [
+            {
+              "text": "Novel architecture achieves 95% accuracy...",
+              "citation": "Smith2024",
+              "page": 5
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  
+  // Evolution context
+  "evolution_summary": [
+    {
+      "operation": "ADD_NODE",
+      "view": "DETECTION_METHOD",
+      "parent": "/detection_method",
+      "new_node": "transformer_based",
+      "justification": "10 papers use this approach..."
+    }
+  ],
+  
+  // Questions to address
+  "must_answer_questions": [
+    "What are the emerging detection paradigms?",
+    "How do new methods compare to traditional approaches?"
+  ],
+  
+  // Transparency
+  "reconstruction_scores": [
+    {
+      "view_id": "review_001/DETECTION_METHOD",
+      "fit_gain": 12.5,
+      "stress_reduction": 0.45,
+      "edit_cost": 2.0,
+      "combined_score": 8.3
+    }
+  ]
+}
+```
+
+**Key Features**:
+- ✅ **Machine-parseable**: JSON format with strict schema
+- ✅ **Executable constraints**: `writing_rules` provide clear do/dont guidance
+- ✅ **Evidence-grounded**: Each subsection links to specific evidence cards
+- ✅ **Traceable**: `evolution_summary` explains all structural changes
+- ✅ **Transparent**: `reconstruction_scores` show decision rationale
 
 ---
 

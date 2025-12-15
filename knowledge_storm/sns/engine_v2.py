@@ -371,16 +371,98 @@ class SNSRunner:
         if not self.results:
             return
         
-        # Save complete results as JSON
-        results_path = os.path.join(self.args.output_dir, "igfinder2_results.json")
+        # Save complete results as JSON (for debugging/archival)
+        results_path = os.path.join(self.args.output_dir, "sns_results.json")
         logger.info(f"Saving complete results to {results_path}")
         with open(results_path, 'w') as f:
             json.dump(self.results.to_dict(), f, indent=2)
         
-        # Save human-readable report
-        report_path = os.path.join(self.args.output_dir, "igfinder2_report.md")
-        logger.info(f"Saving human-readable report to {report_path}")
+        # Save human-readable audit report (for researchers)
+        report_path = os.path.join(self.args.output_dir, "audit_report.md")
+        logger.info(f"Saving audit report to {report_path}")
         self._generate_markdown_report(report_path)
+        
+        # Save machine-readable guidance pack (for downstream systems)
+        if self.results.delta_aware_guidance:
+            guidance_pack_path = os.path.join(self.args.output_dir, "guidance_pack.json")
+            logger.info(f"Saving machine-readable guidance pack to {guidance_pack_path}")
+            self._save_guidance_pack(guidance_pack_path)
+    
+    def _save_guidance_pack(self, output_path: str):
+        """
+        Save machine-readable guidance pack for downstream systems.
+        
+        The guidance pack is the primary output for automated survey generation systems.
+        It contains:
+        - Taxonomy structure (main_axis, aux_axis)
+        - Writing mode (DELTA_FIRST vs ANCHOR_PLUS_DELTA)
+        - Structured outline with constraints
+        - Executable writing rules (do/dont)
+        - Evolution summary (what changed and why)
+        - Must-answer questions
+        - Reconstruction scores (for transparency)
+        """
+        if not self.results or not self.results.delta_aware_guidance:
+            logger.warning("No delta-aware guidance to save")
+            return
+        
+        guidance = self.results.delta_aware_guidance
+        
+        # Create machine-readable guidance pack
+        guidance_pack = {
+            # Core metadata
+            "topic": guidance.topic,
+            "generation_date": guidance.generation_date.isoformat(),
+            
+            # Writing strategy
+            "writing_mode": guidance.main_axis_mode.value,
+            "writing_rules": guidance.writing_rules.to_dict(),
+            
+            # Taxonomy structure (updated with evolution)
+            "taxonomy": {
+                "main_axis": {
+                    "facet": guidance.main_axis.facet.value,
+                    "review_id": guidance.main_axis.review_id,
+                    "tree": guidance.main_axis.tree.to_dict(),
+                    "description": guidance.main_axis.description,
+                    "weight": guidance.main_axis.weight,
+                },
+                "aux_axis": {
+                    "facet": guidance.aux_axis.facet.value,
+                    "review_id": guidance.aux_axis.review_id,
+                    "tree": guidance.aux_axis.tree.to_dict(),
+                    "description": guidance.aux_axis.description,
+                    "weight": guidance.aux_axis.weight,
+                } if guidance.aux_axis else None,
+            },
+            
+            # Structured outline with constraints
+            "outline": [section.to_dict() for section in guidance.outline],
+            
+            # Evolution context
+            "evolution_summary": [item.to_dict() for item in guidance.evolution_summary],
+            
+            # Questions to address
+            "must_answer_questions": guidance.must_answer_questions,
+            
+            # Transparency data
+            "reconstruction_scores": [
+                score.to_dict() for score in guidance.reconstruction_scores
+            ],
+            
+            # Schema version for compatibility
+            "schema_version": "2.0",
+        }
+        
+        with open(output_path, 'w') as f:
+            json.dump(guidance_pack, f, indent=2, ensure_ascii=False)
+        
+        logger.info(f"✅ Guidance pack saved: {output_path}")
+        logger.info(f"   - Writing mode: {guidance.main_axis_mode.value}")
+        logger.info(f"   - Main axis: {guidance.main_axis.facet.value}")
+        logger.info(f"   - Sections: {len(guidance.outline)}")
+        logger.info(f"   - Writing rules: {len(guidance.writing_rules.do)} do, {len(guidance.writing_rules.dont)} dont")
+        logger.info(f"   - Evolution ops: {len(guidance.evolution_summary)}")
     
     def _generate_markdown_report(self, output_path: str):
         """Generate markdown report."""
@@ -389,13 +471,18 @@ class SNSRunner:
         
         stats = self.results.statistics
         
-        report = f"""# IG-Finder 2.0 Report
+        report = f"""# SNS Audit Report
+## Self-Nonself Modeling Analysis
 
-## Topic
-{self.results.topic}
+**Research Topic**: {self.results.topic}
 
-## Generation Date
-{self.results.generation_date.strftime("%Y-%m-%d %H:%M:%S")}
+**Analysis Date**: {self.results.generation_date.strftime("%Y-%m-%d %H:%M:%S")}
+
+---
+
+## Executive Summary
+
+This audit report documents the SNS (Self-Nonself) modeling process applied to analyze the current state of research in "{self.results.topic}". The analysis identifies gaps between existing taxonomies (Self) and emerging research (Nonself), proposing minimal structural adaptations.
 
 ## Summary Statistics
 
