@@ -1,14 +1,20 @@
 """
-IG-Finder 2.0: Multi-view Atlas Stress Test Framework
+SNS: Self-Nonself Modeling for Automatic Survey Systems
 
-A framework for identifying structural taxonomy gaps through multi-view
-stress testing and minimal necessary evolution planning.
+A framework for mitigating cognitive lag in automatic survey generation
+through self-nonself modeling, multi-view stress testing, and minimal
+necessary structural evolution.
+
+Core Innovation:
+- Self: Existing consensus (multi-view taxonomy atlas)
+- Nonself: New research that doesn't fit (stress test results)
+- Adaptation: Minimal evolution + delta-aware guidance
 """
 
 # Core IG-Finder 2.0 imports
 from .engine_v2 import (
-    IGFinder2Runner,
-    IGFinder2Arguments,
+    SNSRunner,
+    SNSArguments,
 )
 
 from .dataclass_v2 import (
@@ -35,7 +41,7 @@ from .dataclass_v2 import (
     Subsection,
     EvidenceCard,
     EvolutionSummaryItem,
-    IGFinder2Results,
+    SNSResults,
 )
 
 # Legacy data classes (shared between v1 and v2)
@@ -80,8 +86,8 @@ __version__ = "2.0.0"
 
 __all__ = [
     # Engine
-    "IGFinder2Runner",
-    "IGFinder2Arguments",
+    "SNSRunner",
+    "SNSArguments",
     
     # Core data structures
     "MultiViewBaseline",
@@ -107,7 +113,7 @@ __all__ = [
     "Subsection",
     "EvidenceCard",
     "EvolutionSummaryItem",
-    "IGFinder2Results",
+    "SNSResults",
     
     # Shared data classes
     "ReviewPaper",

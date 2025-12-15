@@ -11,9 +11,9 @@ import logging
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from knowledge_storm.ig_finder import (
-    IGFinder2Runner,
-    IGFinder2Arguments,
+from knowledge_storm.sns import (
+    SNSRunner,
+    SNSArguments,
     IGFinderLMConfigs,
 )
 from knowledge_storm.rm import ArxivSearchRM
@@ -115,7 +115,7 @@ def main():
     rm = Retriever(rm=ArxivSearchRM(k=10))
     
     # Create IG-Finder 2.0 arguments
-    igfinder2_args = IGFinder2Arguments(
+    igfinder2_args = SNSArguments(
         topic=args.topic,
         output_dir=args.output_dir,
         top_k_reviews=args.top_k_reviews,
@@ -128,7 +128,7 @@ def main():
     
     # Create runner
     logger.info("Creating IG-Finder 2.0 runner...")
-    runner = IGFinder2Runner(
+    runner = SNSRunner(
         args=igfinder2_args,
         lm_configs=lm_configs,
         rm=rm,
