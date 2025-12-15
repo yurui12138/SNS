@@ -386,10 +386,22 @@ class EvolutionPlanner:
                                 candidates.append(add_op)
                 
                 # Try SPLIT_NODE for overcrowded nodes
-                # (simplified: skip for now, can add later)
+                for view_id, failure_rate in cluster.view_failure_rates.items():
+                    if failure_rate > 0.5:  # Moderate failure, might need splitting
+                        view = baseline.get_view_by_id(view_id)
+                        if view:
+                            split_op = self._propose_split_node(cluster, view, fit_vectors)
+                            if split_op:
+                                candidates.append(split_op)
                 
                 # Try RENAME_NODE for drifted nodes
-                # (simplified: skip for now, can add later)
+                for view_id, failure_rate in cluster.view_failure_rates.items():
+                    if failure_rate > 0.4:  # Semantic drift indication
+                        view = baseline.get_view_by_id(view_id)
+                        if view:
+                            rename_op = self._propose_rename_node(cluster, view, fit_vectors)
+                            if rename_op:
+                                candidates.append(rename_op)
                 
                 # Select best operation
                 if candidates:
@@ -621,6 +633,277 @@ class EvolutionPlanner:
             ))
         
         return evidence
+    
+    def _propose_split_node(
+        self,
+        cluster: StressCluster,
+        view: TaxonomyView,
+        fit_vectors: List[FitVector]
+    ) -> Optional[SplitNodeOperation]:
+        """
+        Propose splitting an overcrowded node into sub-nodes.
+        
+        This addresses cases where an existing category has become too broad
+        and needs to be subdivided to better accommodate papers.
+        """
+        logger.info(f"  Proposing SPLIT_NODE for view {view.view_id}")
+        
+        # Identify candidate nodes for splitting (nodes with many children or high coverage)
+        candidate_nodes = self._find_split_candidates(view, cluster, fit_vectors)
+        
+        if not candidate_nodes:
+            return None
+        
+        # Select best candidate (node with highest coverage + conflict)
+        target_node = candidate_nodes[0]
+        target_path = target_node.path
+        
+        # Prepare cluster information for LLM
+        cluster_papers_text = self._format_cluster_papers(cluster)
+        cluster_innovations_text = self._extract_cluster_innovations(cluster, fit_vectors, view)
+        
+        # Get current node definition
+        current_definition = view.node_definitions.get(target_path)
+        
+        try:
+            # Call LLM to generate sub-nodes (wrap in dspy context)
+            with dspy.context(lm=self.lm):
+                result = self.subnode_generator(
+                    parent_node_name=target_node.name,
+                    parent_definition=current_definition.definition if current_definition else "",
+                    cluster_papers=cluster_papers_text,
+                    cluster_innovations=cluster_innovations_text
+                )
+            
+            # Parse result
+            subnode_data = safe_json_loads(result.subnodes_json)
+            
+            if not subnode_data or not subnode_data.get("subnodes"):
+                return None
+            
+            # Build NewNodeProposal objects (for subnodes)
+            subnodes = []
+            for sn in subnode_data.get("subnodes", []):
+                subnodes.append(NewNodeProposal(
+                    name=sn.get("name", "Subnode"),
+                    definition=sn.get("definition", ""),
+                    inclusion_criteria=sn.get("inclusion_criteria", []),
+                    exclusion_criteria=sn.get("exclusion_criteria", []),
+                    keywords=sn.get("keywords", [])
+                ))
+            
+            if len(subnodes) < 2:
+                # Not worth splitting if less than 2 subnodes
+                return None
+            
+            # Calculate fit gain (moderate improvement expected)
+            fit_gain = len(cluster.papers) * 0.3
+            
+            # Extract evidence
+            evidence = self._extract_cluster_evidence(cluster)
+            
+            operation = SplitNodeOperation(
+                view_id=view.view_id,
+                node_path=target_path,
+                sub_nodes=subnodes,
+                evidence=evidence,
+                fit_gain=fit_gain
+            )
+            
+            return operation
+            
+        except Exception as e:
+            logger.error(f"Error proposing SPLIT_NODE: {e}")
+            return None
+    
+    def _find_split_candidates(
+        self,
+        view: TaxonomyView,
+        cluster: StressCluster,
+        fit_vectors: List[FitVector]
+    ) -> List[TaxonomyTreeNode]:
+        """
+        Find nodes that are candidates for splitting.
+        
+        Criteria:
+        1. Has many children (>= 5) OR is a leaf with high coverage
+        2. High coverage rate in cluster papers
+        3. Has some conflict (indicating overcrowding)
+        """
+        candidates = []
+        
+        # Find fit vectors for cluster papers
+        paper_ids = {p.url for p in cluster.papers}
+        cluster_vectors = [fv for fv in fit_vectors if fv.paper_id in paper_ids]
+        
+        # Analyze each node
+        for node_path, node in view.tree.nodes.items():
+            if node.name == "ROOT":
+                continue
+            
+            # Criterion 1: Many children or leaf
+            has_many_children = len(node.children) >= 5
+            is_leaf = node.is_leaf
+            
+            if not (has_many_children or is_leaf):
+                continue
+            
+            # Criterion 2 & 3: Check coverage and conflict in cluster
+            coverage_count = 0
+            conflict_count = 0
+            
+            for fv in cluster_vectors[:10]:  # Sample first 10
+                for report in fv.fit_reports:
+                    if report.view_id == view.view_id:
+                        for match in report.node_matches:
+                            if match.node_path == node_path:
+                                if match.coverage_score > 0.5:
+                                    coverage_count += 1
+                                if match.conflict_score > 0.3:
+                                    conflict_count += 1
+            
+            if coverage_count >= 3 and conflict_count >= 1:
+                # This node is a good candidate
+                candidates.append((node, coverage_count, conflict_count))
+        
+        # Sort by combined score (coverage + conflict)
+        candidates.sort(key=lambda x: (x[1] + x[2]), reverse=True)
+        
+        return [node for node, _, _ in candidates]
+    
+    def _propose_rename_node(
+        self,
+        cluster: StressCluster,
+        view: TaxonomyView,
+        fit_vectors: List[FitVector]
+    ) -> Optional[RenameNodeOperation]:
+        """
+        Propose renaming a node that has undergone semantic drift.
+        
+        This addresses cases where the terminology/definition of a category
+        has shifted and needs to be updated to reflect current usage.
+        """
+        logger.info(f"  Proposing RENAME_NODE for view {view.view_id}")
+        
+        # Identify candidate nodes for renaming (nodes with residual but some coverage)
+        candidate_nodes = self._find_rename_candidates(view, cluster, fit_vectors)
+        
+        if not candidate_nodes:
+            return None
+        
+        # Select best candidate (node with highest residual score)
+        target_node = candidate_nodes[0]
+        target_path = target_node.path
+        
+        # Prepare cluster information for LLM
+        cluster_papers_text = self._format_cluster_papers(cluster)
+        cluster_innovations_text = self._extract_cluster_innovations(cluster, fit_vectors, view)
+        
+        # Get current node definition
+        current_definition = view.node_definitions.get(target_path)
+        
+        try:
+            # Call LLM to propose new name and definition (wrap in dspy context)
+            with dspy.context(lm=self.lm):
+                result = self.node_renamer(
+                    current_node_name=target_node.name,
+                    current_definition=current_definition.definition if current_definition else "",
+                    cluster_papers=cluster_papers_text,
+                    cluster_innovations=cluster_innovations_text
+                )
+            
+            # Parse result
+            rename_data = safe_json_loads(result.rename_json)
+            
+            if not rename_data:
+                return None
+            
+            new_name = rename_data.get("new_name", target_node.name)
+            new_definition = rename_data.get("new_definition", "")
+            rationale = rename_data.get("rationale", "")
+            
+            # Skip if name didn't change
+            if new_name == target_node.name:
+                return None
+            
+            # Calculate fit gain (small improvement expected)
+            fit_gain = len(cluster.papers) * 0.2
+            
+            # Extract evidence
+            evidence = self._extract_cluster_evidence(cluster)
+            
+            operation = RenameNodeOperation(
+                view_id=view.view_id,
+                node_path=target_path,
+                old_name=target_node.name,
+                new_name=new_name,
+                new_definition=new_definition,
+                drift_score=0.5,  # Can be calculated from residual scores
+                evidence=evidence,
+                fit_gain=fit_gain
+            )
+            
+            return operation
+            
+        except Exception as e:
+            logger.error(f"Error proposing RENAME_NODE: {e}")
+            return None
+    
+    def _find_rename_candidates(
+        self,
+        view: TaxonomyView,
+        cluster: StressCluster,
+        fit_vectors: List[FitVector]
+    ) -> List[TaxonomyTreeNode]:
+        """
+        Find nodes that are candidates for renaming.
+        
+        Criteria:
+        1. Has moderate coverage (papers partially match)
+        2. Has high residual (papers have unaddressed content)
+        3. Low conflict (not contradicting, just incomplete)
+        """
+        candidates = []
+        
+        # Find fit vectors for cluster papers
+        paper_ids = {p.url for p in cluster.papers}
+        cluster_vectors = [fv for fv in fit_vectors if fv.paper_id in paper_ids]
+        
+        # Analyze each node
+        for node_path, node in view.tree.nodes.items():
+            if node.name == "ROOT":
+                continue
+            
+            # Check coverage, residual, and conflict in cluster
+            coverage_scores = []
+            residual_scores = []
+            conflict_scores = []
+            
+            for fv in cluster_vectors[:10]:  # Sample first 10
+                for report in fv.fit_reports:
+                    if report.view_id == view.view_id:
+                        for match in report.node_matches:
+                            if match.node_path == node_path:
+                                coverage_scores.append(match.coverage_score)
+                                residual_scores.append(match.residual_score)
+                                conflict_scores.append(match.conflict_score)
+            
+            if not coverage_scores:
+                continue
+            
+            avg_coverage = sum(coverage_scores) / len(coverage_scores)
+            avg_residual = sum(residual_scores) / len(residual_scores)
+            avg_conflict = sum(conflict_scores) / len(conflict_scores)
+            
+            # Criterion: moderate coverage + high residual + low conflict
+            if 0.3 < avg_coverage < 0.7 and avg_residual > 0.5 and avg_conflict < 0.4:
+                # This node is a good candidate for renaming
+                candidates.append((node, avg_residual, avg_coverage))
+        
+        # Sort by residual score (higher = more drift)
+        candidates.sort(key=lambda x: x[1], reverse=True)
+        
+        return [node for node, _, _ in candidates]
 
 
 # ============================================================================

@@ -25,6 +25,7 @@ from ..dataclass_v2 import (
 )
 from ..schemas_v2 import create_taxonomy_extractor, create_node_definition_builder
 from ..parsing import safe_json_loads
+from .compensatory_view_inducer import CompensatoryViewInducer
 
 logger = logging.getLogger(__name__)
 
@@ -603,11 +604,28 @@ class Phase1Pipeline:
     Complete Phase 1 pipeline: Multi-view Baseline Construction.
     """
     
-    def __init__(self, retriever: Retriever, lm, top_k_reviews: int = 15):
+    def __init__(
+        self, 
+        retriever: Retriever, 
+        lm, 
+        top_k_reviews: int = 15, 
+        enable_compensatory: bool = True,
+        max_compensatory_views: int = 3
+    ):
         self.review_retriever = ReviewRetriever(retriever, top_k=top_k_reviews)
         self.taxonomy_extractor = TaxonomyViewExtractor(lm)
         self.node_builder = NodeDefinitionBuilder(lm)
         self.baseline_builder = MultiViewBaselineBuilder()
+        self.enable_compensatory = enable_compensatory
+        
+        # Initialize compensatory view inducer
+        if enable_compensatory:
+            self.compensatory_inducer = CompensatoryViewInducer(
+                lm=lm,
+                max_compensatory_views=max_compensatory_views
+            )
+        else:
+            self.compensatory_inducer = None
     
     def run(self, topic: str) -> MultiViewBaseline:
         """
@@ -646,6 +664,13 @@ class Phase1Pipeline:
         # Step 4: Build multi-view baseline
         logger.info("Step 4: Building multi-view baseline...")
         baseline = self.baseline_builder.build_baseline(topic, views, reviews)
+        
+        # Step 5: Apply compensatory view induction if enabled
+        if self.enable_compensatory and self.compensatory_inducer:
+            logger.info("Step 5: Applying compensatory view induction...")
+            baseline = self.compensatory_inducer.induce_if_needed(topic, baseline)
+        else:
+            logger.info("Step 5: Compensatory view induction disabled (skipping)")
         
         logger.info("Phase 1 completed successfully!")
         logger.info("="*80)

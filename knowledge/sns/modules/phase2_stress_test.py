@@ -12,6 +12,8 @@ import dspy
 
 from ...interface import Information
 from ..dataclass import ResearchPaper
+from ..embeddings import create_embedding_model, compute_hybrid_similarity
+from ..nli import create_nli_model, compute_max_conflict_score
 from ..dataclass_v2 import (
     MultiViewBaseline,
     TaxonomyView,
@@ -141,15 +143,23 @@ class EmbeddingBasedRetriever:
     """
     Retrieves top-K candidate leaf nodes using embedding similarity.
     
-    Uses precomputed embeddings (SPECTER2, SciNCL, or e5-base).
-    This is a placeholder - in production would use actual embedding models.
+    Uses real embedding models (SPECTER2, SciNCL, or fallback).
     """
     
-    def __init__(self, embedding_model_name: str = "dummy"):
+    def __init__(self, embedding_model_name: str = "specter2"):
         self.model_name = embedding_model_name
-        # In production, load actual model:
-        # from sentence_transformers import SentenceTransformer
-        # self.model = SentenceTransformer('allenai/specter2')
+        logger.info(f"Initializing EmbeddingBasedRetriever with {embedding_model_name}")
+        
+        # Load real embedding model
+        try:
+            self.embedder = create_embedding_model(
+                model_type=embedding_model_name,
+                device="cpu"  # Can be configured to use GPU
+            )
+            logger.info(f"Successfully loaded {embedding_model_name} embedding model")
+        except Exception as e:
+            logger.warning(f"Failed to load {embedding_model_name}, using fallback: {e}")
+            self.embedder = create_embedding_model(model_type="fallback", device="cpu")
     
     def retrieve_candidates(
         self, 
@@ -206,21 +216,27 @@ class EmbeddingBasedRetriever:
     
     def _compute_similarity(self, text1: str, text2: str) -> float:
         """
-        Compute similarity between two texts.
-        
-        Placeholder: Simple keyword overlap.
-        In production: Use actual embeddings.
+        Compute similarity between two texts using real embeddings.
         """
-        words1 = set(text1.lower().split())
-        words2 = set(text2.lower().split())
-        
-        if not words1 or not words2:
+        if not text1 or not text2:
             return 0.0
         
-        intersection = len(words1 & words2)
-        union = len(words1 | words2)
-        
-        return intersection / union if union > 0 else 0.0
+        try:
+            # Use real embedding model
+            emb1 = self.embedder.encode([text1])[0]
+            emb2 = self.embedder.encode([text2])[0]
+            similarity = self.embedder.similarity(emb1, emb2)
+            return float(similarity)
+        except Exception as e:
+            logger.warning(f"Embedding computation failed: {e}, using fallback")
+            # Fallback to keyword overlap
+            words1 = set(text1.lower().split())
+            words2 = set(text2.lower().split())
+            if not words1 or not words2:
+                return 0.0
+            intersection = len(words1 & words2)
+            union = len(words1 | words2)
+            return intersection / union if union > 0 else 0.0
 
 
 class FitTester:
@@ -230,8 +246,23 @@ class FitTester:
     Implements Coverage / Conflict / Residual scoring from design doc.
     """
     
-    def __init__(self, retriever: EmbeddingBasedRetriever):
+    def __init__(self, retriever: EmbeddingBasedRetriever, nli_model=None):
         self.retriever = retriever
+        
+        # Initialize NLI model for conflict detection
+        if nli_model is None:
+            logger.info("Initializing NLI model for conflict detection")
+            try:
+                self.nli_model = create_nli_model(
+                    model_type="deberta",
+                    device="cpu"  # Can be configured to use GPU
+                )
+                logger.info("Successfully loaded DeBERTa-MNLI model")
+            except Exception as e:
+                logger.warning(f"Failed to load NLI model: {e}, using fallback")
+                self.nli_model = create_nli_model(model_type="fallback")
+        else:
+            self.nli_model = nli_model
     
     def test_fit(
         self,
@@ -308,29 +339,45 @@ class FitTester:
     
     def _calculate_conflict(self, claims: PaperClaims, node_def: NodeDefinition) -> float:
         """
-        Calculate conflict score.
+        Calculate conflict score using real NLI model.
         
         Formula: Conflict = max_{h in Exclusion+Boundary} P_NLI(contradiction | claim, h)
-        
-        Placeholder: Keyword-based conflict detection.
-        In production: Use NLI model (DeBERTa-MNLI).
         """
-        max_conflict = 0.0
+        if not node_def.exclusion_criteria and not node_def.boundary_statements:
+            return 0.0
         
-        # Check paper claims against exclusion criteria
-        all_claims = []
-        for claim_list in [claims.core_idea, claims.mechanism, claims.novelty_bullets]:
-            all_claims.extend([c.text for c in claim_list])
+        # Combine all claims
+        all_claims_text = " ".join([
+            c.text for claim_list in [claims.core_idea, claims.mechanism, claims.novelty_bullets]
+            for c in claim_list
+        ])
         
-        all_exclusions = node_def.exclusion_criteria + node_def.boundary_statements
+        if not all_claims_text.strip():
+            return 0.0
         
-        for claim in all_claims:
-            for exclusion in all_exclusions:
-                # Placeholder: Simple keyword overlap as proxy for contradiction
-                conflict_score = self._keyword_conflict_score(claim, exclusion)
-                max_conflict = max(max_conflict, conflict_score)
-        
-        return max_conflict
+        try:
+            # Use real NLI model for conflict detection
+            max_conflict = compute_max_conflict_score(
+                claim_text=all_claims_text,
+                node_definition_text=node_def.definition,
+                exclusion_criteria=node_def.exclusion_criteria + node_def.boundary_statements,
+                nli_model=self.nli_model
+            )
+            return max_conflict
+        except Exception as e:
+            logger.warning(f"NLI conflict detection failed: {e}, using fallback")
+            # Fallback to keyword-based detection
+            max_conflict = 0.0
+            all_claims = [c.text for claim_list in [claims.core_idea, claims.mechanism, claims.novelty_bullets]
+                         for c in claim_list]
+            all_exclusions = node_def.exclusion_criteria + node_def.boundary_statements
+            
+            for claim in all_claims:
+                for exclusion in all_exclusions:
+                    conflict_score = self._keyword_conflict_score(claim, exclusion)
+                    max_conflict = max(max_conflict, conflict_score)
+            
+            return max_conflict
     
     def _keyword_conflict_score(self, claim: str, exclusion: str) -> float:
         """
@@ -439,9 +486,9 @@ class MultiViewStressTester:
     Performs stress test across all views in the baseline.
     """
     
-    def __init__(self, retriever: EmbeddingBasedRetriever):
+    def __init__(self, retriever: EmbeddingBasedRetriever, nli_model=None):
         self.retriever = retriever
-        self.fit_tester = FitTester(retriever)
+        self.fit_tester = FitTester(retriever, nli_model)
     
     def test_paper(
         self,
@@ -560,10 +607,19 @@ class Phase2Pipeline:
     Complete Phase 2 pipeline: Multi-view Stress Test.
     """
     
-    def __init__(self, lm, embedding_model: str = "dummy"):
+    def __init__(self, lm, embedding_model: str = "specter2", nli_model_type: str = "deberta"):
         self.claim_extractor = PaperClaimExtractor(lm)
         self.retriever = EmbeddingBasedRetriever(embedding_model)
-        self.stress_tester = MultiViewStressTester(self.retriever)
+        
+        # Initialize NLI model
+        logger.info(f"Initializing NLI model: {nli_model_type}")
+        try:
+            nli_model = create_nli_model(model_type=nli_model_type, device="cpu")
+        except Exception as e:
+            logger.warning(f"Failed to load NLI model, using fallback: {e}")
+            nli_model = None
+        
+        self.stress_tester = MultiViewStressTester(self.retriever, nli_model)
     
     def run(
         self,
