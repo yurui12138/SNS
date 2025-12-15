@@ -26,11 +26,11 @@ import sys
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
-from knowledge_storm.lm import LitellmModel
-from knowledge_storm.rm import ArxivSearchRM as ArxivRM
-from knowledge_storm.sns.engine_v2 import SNSRunner, SNSArguments
-from knowledge_storm.interface import LMConfigs, Retriever
-from knowledge_storm.sns.evaluation import compute_all_metrics, print_metrics_report
+from knowledge.lm import LitellmModel
+from knowledge.rm import ArxivSearchRM as ArxivRM
+from knowledge.sns.engine_v2 import SNSRunner, SNSArguments
+from knowledge.interface import LMConfigs, Retriever
+from knowledge.sns.evaluation import compute_all_metrics, print_metrics_report
 
 # Set up logging
 logging.basicConfig(

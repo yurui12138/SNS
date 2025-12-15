@@ -11,14 +11,14 @@ import logging
 # Add project root to path
 sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 
-from knowledge_storm.sns import (
+from knowledge.sns import (
     SNSRunner,
     SNSArguments,
     SNSLMConfigs,
 )
-from knowledge_storm.rm import ArxivSearchRM
-from knowledge_storm.lm import LitellmModel
-from knowledge_storm.interface import Retriever
+from knowledge.rm import ArxivSearchRM
+from knowledge.lm import LitellmModel
+from knowledge.interface import Retriever
 
 # Setup logging
 logging.basicConfig(

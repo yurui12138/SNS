@@ -8,14 +8,14 @@ def test_imports():
     
     # Test 1: Main SNS imports
     try:
-        from knowledge_storm.sns import SNSRunner, SNSArguments
+        from knowledge.sns import SNSRunner, SNSArguments
         print("✓ Main SNS classes imported successfully")
     except ImportError as e:
         errors.append(f"✗ Main SNS classes: {e}")
     
     # Test 2: Data structures
     try:
-        from knowledge_storm.sns import (
+        from knowledge.sns import (
             MultiViewBaseline,
             TaxonomyView,
             TaxonomyTree,
@@ -31,7 +31,7 @@ def test_imports():
     
     # Test 3: Phase modules
     try:
-        from knowledge_storm.sns.modules import (
+        from knowledge.sns.modules import (
             Phase1Pipeline,
             Phase2Pipeline,
             Phase3Pipeline,
@@ -43,7 +43,7 @@ def test_imports():
     
     # Test 4: Evaluation
     try:
-        from knowledge_storm.sns.evaluation import (
+        from knowledge.sns.evaluation import (
             TimeSliceEvaluator,
             compute_all_metrics,
             print_metrics_report,
@@ -54,7 +54,7 @@ def test_imports():
     
     # Test 5: Infrastructure
     try:
-        from knowledge_storm.sns import (
+        from knowledge.sns import (
             create_embedding_model,
             create_nli_model,
         )
