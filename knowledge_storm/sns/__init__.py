@@ -11,7 +11,7 @@ Core Innovation:
 - Adaptation: Minimal evolution + delta-aware guidance
 """
 
-# Core IG-Finder 2.0 imports
+# Core SNS imports
 from .engine_v2 import (
     SNSRunner,
     SNSArguments,
@@ -21,13 +21,18 @@ from .dataclass_v2 import (
     MultiViewBaseline,
     TaxonomyView,
     TaxonomyTree,
-    TaxonomyNode,
+    TaxonomyTreeNode,  # Fixed: was TaxonomyNode
     NodeDefinition,
+    EvidenceSpan,
     FacetLabel,
     FitVector,
     FitLabel,
     FitReport,
     FitScores,
+    LostNovelty,
+    ConflictEvidence,
+    PaperClaims,
+    PaperClaim,
     StressCluster,
     ClusterType,
     EvolutionProposal,
@@ -36,11 +41,15 @@ from .dataclass_v2 import (
     SplitNodeOperation,
     RenameNodeOperation,
     NewNodeProposal,
+    OperationType,
     DeltaAwareGuidance,
     Section,
     Subsection,
     EvidenceCard,
     EvolutionSummaryItem,
+    WritingMode,
+    ViewReconstructionScore,
+    WritingRules,
     SNSResults,
 )
 
@@ -93,13 +102,18 @@ __all__ = [
     "MultiViewBaseline",
     "TaxonomyView",
     "TaxonomyTree",
-    "TaxonomyNode",
+    "TaxonomyTreeNode",
     "NodeDefinition",
+    "EvidenceSpan",
     "FacetLabel",
     "FitVector",
     "FitLabel",
     "FitReport",
     "FitScores",
+    "LostNovelty",
+    "ConflictEvidence",
+    "PaperClaims",
+    "PaperClaim",
     "StressCluster",
     "ClusterType",
     "EvolutionProposal",
@@ -108,11 +122,15 @@ __all__ = [
     "SplitNodeOperation",
     "RenameNodeOperation",
     "NewNodeProposal",
+    "OperationType",
     "DeltaAwareGuidance",
     "Section",
     "Subsection",
     "EvidenceCard",
     "EvolutionSummaryItem",
+    "WritingMode",
+    "ViewReconstructionScore",
+    "WritingRules",
     "SNSResults",
     
     # Shared data classes
