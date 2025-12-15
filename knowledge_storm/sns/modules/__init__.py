@@ -1,46 +1,61 @@
 """
-Modules for IG-Finder framework.
+SNS Framework Modules - Phase implementations.
+
+Four-phase pipeline:
+- Phase 1: Multi-view Baseline (Self Construction)
+- Phase 2: Multi-view Stress Test (Nonself Identification)
+- Phase 3: Stress Clustering & Evolution (Adaptation)
+- Phase 4: Delta-aware Guidance Generation
 """
 
-from .cognitive_self_construction import (
+from .phase1_multiview_baseline import (
+    Phase1Pipeline,
     ReviewRetriever,
-    ConsensusExtractor,
-    CognitiveBaselineBuilder,
-    CognitiveSelfConstructionModule,
+    TaxonomyViewExtractor,
+    NodeDefinitionBuilder,
+    MultiViewBaselineBuilder,
 )
 
-from .innovative_nonself_identification import (
-    FrontierPaperRetriever,
-    ExpertPerspectiveGenerator,
-    DifferenceAwareAnalyzer,
-    InnovationClusterIdentifier,
-    InnovativeNonSelfIdentificationModule,
+from .phase2_stress_test import (
+    Phase2Pipeline,
+    PaperClaimExtractor,
+    EmbeddingBasedRetriever,
+    FitTester,
 )
 
-from .mind_map_manager import (
-    DynamicMindMapManager,
-    EvolutionStateAnnotator,
+from .phase3_evolution import (
+    Phase3Pipeline,
+    StressClusterer,
+    EvolutionPlanner,
 )
 
-from .report_generation import (
-    InnovationGapReportGenerator,
+from .phase4_guidance import (
+    Phase4Pipeline,
+    AxisSelector,
+    GuidanceGenerator,
 )
 
 __all__ = [
-    # Cognitive Self Construction
+    # Phase 1: Self Construction
+    "Phase1Pipeline",
     "ReviewRetriever",
-    "ConsensusExtractor",
-    "CognitiveBaselineBuilder",
-    "CognitiveSelfConstructionModule",
-    # Innovative Non-self Identification
-    "FrontierPaperRetriever",
-    "ExpertPerspectiveGenerator",
-    "DifferenceAwareAnalyzer",
-    "InnovationClusterIdentifier",
-    "InnovativeNonSelfIdentificationModule",
-    # Mind Map Management
-    "DynamicMindMapManager",
-    "EvolutionStateAnnotator",
-    # Report Generation
-    "InnovationGapReportGenerator",
+    "TaxonomyViewExtractor",
+    "NodeDefinitionBuilder",
+    "MultiViewBaselineBuilder",
+    
+    # Phase 2: Nonself Identification
+    "Phase2Pipeline",
+    "PaperClaimExtractor",
+    "EmbeddingBasedRetriever",
+    "FitTester",
+    
+    # Phase 3: Adaptation
+    "Phase3Pipeline",
+    "StressClusterer",
+    "EvolutionPlanner",
+    
+    # Phase 4: Writing Guidance
+    "Phase4Pipeline",
+    "AxisSelector",
+    "GuidanceGenerator",
 ]

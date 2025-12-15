@@ -1,7 +1,11 @@
 """
-IG-Finder 2.0 Engine
+SNS (Self-Nonself) Engine
 
-Main execution engine orchestrating all phases.
+Main execution engine orchestrating all four phases:
+1. Self Construction (Multi-view Baseline)
+2. Nonself Identification (Stress Test)
+3. Adaptation (Evolution Planning)
+4. Writing Guidance Generation
 """
 import logging
 import json
@@ -32,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class SNSArguments:
-    """Arguments for IG-Finder 2.0 runner."""
+    """Arguments for SNS (Self-Nonself) runner."""
     topic: str
     output_dir: str
     top_k_reviews: int = 15
@@ -45,12 +49,12 @@ class SNSArguments:
 
 class SNSRunner:
     """
-    Main runner for IG-Finder 2.0.
+    Main runner for SNS (Self-Nonself Modeling).
     
     Orchestrates all phases:
-    1. Multi-view Baseline Construction
-    2. Multi-view Stress Test
-    3. Stress Clustering & Minimal Evolution (simplified in v1)
+    1. Self Construction (Multi-view Baseline)
+    2. Nonself Identification (Multi-view Stress Test)
+    3. Adaptation (Stress Clustering & Evolution)
     4. Delta-aware Guidance Generation (simplified in v1)
     """
     
