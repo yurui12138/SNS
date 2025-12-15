@@ -25,6 +25,7 @@ from ..dataclass_v2 import (
     WritingMode,
     WritingRules,
 )
+from .taxonomy_evolution_applier import TaxonomyEvolutionApplier
 
 logger = logging.getLogger(__name__)
 
@@ -576,27 +577,93 @@ class GuidanceGenerator:
         clusters: List[StressCluster],
         proposal: EvolutionProposal
     ) -> List[str]:
-        """Generate overall must-answer questions."""
+        """
+        Generate specific, actionable must-answer questions.
         
-        questions = [
-            f"What are the main organizational dimensions in {main_axis.facet_label.value}?",
-            "How has the field evolved beyond existing reviews?",
-        ]
+        Enhanced to provide:
+        1. Category-specific questions (from taxonomy nodes)
+        2. Evolution-specific questions (from operations)
+        3. Stress-cluster-specific questions
+        4. Cross-cutting synthesis questions
+        """
         
+        questions = []
+        
+        # Core organizational questions
+        leaf_nodes = main_axis.tree.get_leaf_nodes()
+        leaf_names = [n.name for n in leaf_nodes[:5]]  # Top 5
+        
+        questions.append(
+            f"What are the defining characteristics that distinguish {', '.join(leaf_names[:3])}?"
+        )
+        
+        questions.append(
+            f"How does the {main_axis.facet_label.value} perspective organize the {len(leaf_nodes)} "
+            f"distinct categories identified in this survey?"
+        )
+        
+        # Auxiliary axis questions
         if aux_axis:
+            aux_leaf_nodes = aux_axis.tree.get_leaf_nodes()
             questions.append(
-                f"How does {aux_axis.facet_label.value} provide additional perspective?"
+                f"How do the {len(aux_leaf_nodes)} {aux_axis.facet_label.value} dimensions "
+                f"cross-cut the main {main_axis.facet_label.value} categories?"
             )
         
-        if clusters:
-            questions.append(
-                f"What are the {len(clusters)} identified stress points in existing taxonomies?"
-            )
-        
+        # Operation-specific questions (detailed)
         if proposal.operations:
-            questions.append(
-                f"Why are the {len(proposal.operations)} proposed structure updates necessary?"
-            )
+            # Group operations by type
+            add_ops = [op for op in proposal.operations if op.operation_type.value == "ADD_NODE"]
+            split_ops = [op for op in proposal.operations if op.operation_type.value == "SPLIT_NODE"]
+            rename_ops = [op for op in proposal.operations if op.operation_type.value == "RENAME_NODE"]
+            
+            if add_ops:
+                new_categories = [op.new_node.name for op in add_ops]
+                questions.append(
+                    f"Why are the new categories {', '.join(new_categories[:3])} necessary, "
+                    f"and what emerging research do they capture that existing taxonomies miss?"
+                )
+            
+            if split_ops:
+                split_nodes = [op.node_path.split('/')[-1] for op in split_ops]
+                questions.append(
+                    f"What evidence justifies splitting the {', '.join(split_nodes)} "
+                    f"category/categories into finer-grained sub-categories?"
+                )
+            
+            if rename_ops:
+                renamings = [(op.old_name, op.new_name) for op in rename_ops]
+                for old, new in renamings[:2]:  # Top 2
+                    questions.append(
+                        f"What semantic drift motivated renaming '{old}' to '{new}', "
+                        f"and how does this better reflect current research trends?"
+                    )
+        
+        # Cluster-specific questions
+        if clusters:
+            strong_shift_clusters = [c for c in clusters if c.cluster_type.value == "STRONG_SHIFT"]
+            if strong_shift_clusters:
+                questions.append(
+                    f"What are the {len(strong_shift_clusters)} major paradigm shifts or emerging trends "
+                    f"that challenge existing taxonomies, and which papers exemplify these shifts?"
+                )
+            
+            # Ask about specific clusters
+            for i, cluster in enumerate(clusters[:2], 1):  # Top 2
+                cluster_papers = [p.title for p in cluster.papers[:3]]
+                questions.append(
+                    f"Stress Cluster {i}: What common innovations do papers like "
+                    f"'{cluster_papers[0]}' represent, and why do they resist classification "
+                    f"in existing categories (stress score: {cluster.stress_score:.2f})?"
+                )
+        
+        # Synthesis and future directions
+        questions.extend([
+            "How has the field evolved since the most recent comprehensive reviews, "
+            "and what gaps remain in the current taxonomy?",
+            "What are the most promising directions for future research based on the "
+            "identified stress points and structural updates?"
+        ])
         
         return questions
 
@@ -613,6 +680,7 @@ class Phase4Pipeline:
     def __init__(self):
         self.axis_selector = AxisSelector()
         self.guidance_generator = GuidanceGenerator()
+        self.evolution_applier = TaxonomyEvolutionApplier()
     
     def run(
         self,
@@ -656,16 +724,34 @@ class Phase4Pipeline:
             baseline
         )
         
-        # Step 2: Select aux axis
-        logger.info("Step 2: Selecting auxiliary axis...")
+        # Step 2: Apply evolution operations to main axis (NEW: taxonomy_v2)
+        logger.info("Step 2: Applying evolution operations to main axis...")
+        main_axis_evolved = self.evolution_applier.apply_evolution(
+            base_view=main_axis,
+            operations=evolution_proposal.operations
+        )
+        logger.info(f"  Evolved main axis now has {len(main_axis_evolved.tree.nodes)} nodes")
+        
+        # Step 3: Select aux axis
+        logger.info("Step 3: Selecting auxiliary axis...")
         aux_axis = self.axis_selector.select_aux_axis(baseline, clusters, main_axis)
         
-        # Step 3: Generate guidance (NEW: includes mode and writing rules)
-        logger.info("Step 3: Generating delta-aware guidance...")
+        # Apply evolution to aux axis if present
+        if aux_axis:
+            aux_axis_evolved = self.evolution_applier.apply_evolution(
+                base_view=aux_axis,
+                operations=evolution_proposal.operations
+            )
+            logger.info(f"  Evolved aux axis now has {len(aux_axis_evolved.tree.nodes)} nodes")
+        else:
+            aux_axis_evolved = None
+        
+        # Step 4: Generate guidance (NEW: uses evolved taxonomies)
+        logger.info("Step 4: Generating delta-aware guidance with evolved taxonomies...")
         guidance = self.guidance_generator.generate_guidance(
             topic=topic,
-            main_axis=main_axis,
-            aux_axis=aux_axis,
+            main_axis=main_axis_evolved,  # Use evolved taxonomy
+            aux_axis=aux_axis_evolved,     # Use evolved taxonomy
             main_axis_mode=main_axis_mode,
             reconstruction_scores=reconstruction_scores,
             clusters=clusters,
