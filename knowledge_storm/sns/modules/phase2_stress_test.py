@@ -8,6 +8,7 @@ import logging
 import numpy as np
 from typing import List, Dict, Optional, Tuple
 from collections import defaultdict
+import dspy
 
 from ...interface import Information
 from ..dataclass import ResearchPaper
@@ -60,12 +61,13 @@ class PaperClaimExtractor:
             # Prepare input
             paper_text = " ".join(paper.snippets)[:15000]
             
-            # Call LLM
-            result = self.extractor(
-                paper_title=paper.title,
-                paper_abstract=paper.description,
-                paper_text=paper_text
-            )
+            # Call LLM (wrap in dspy context)
+            with dspy.context(lm=self.lm):
+                result = self.extractor(
+                    paper_title=paper.title,
+                    paper_abstract=paper.description,
+                    paper_text=paper_text
+                )
             
             # Parse JSON
             claims_data = safe_json_loads(result.claims_json)

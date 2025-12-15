@@ -25,6 +25,8 @@ from .dataclass_v2 import (
     DeltaAwareGuidance,
     StressCluster,
     EvolutionProposal,
+    WritingMode,
+    WritingRules,
 )
 from .modules.phase1_multiview_baseline import Phase1Pipeline
 from .modules.phase2_stress_test import Phase2Pipeline
@@ -32,6 +34,41 @@ from .modules.phase3_evolution import Phase3Pipeline
 from .modules.phase4_guidance import Phase4Pipeline
 
 logger = logging.getLogger(__name__)
+
+
+class SNSLMConfigs(LMConfigs):
+    """
+    Language model configurations for SNS (Self-Nonself) system.
+    
+    Each phase requires a specific LM:
+    - consensus_extraction_lm: Phase 1 (taxonomy extraction)
+    - deviation_analysis_lm: Phase 2 (stress testing)
+    - cluster_validation_lm: Phase 3 (evolution planning)
+    - report_generation_lm: Phase 4 (guidance generation)
+    """
+    
+    def __init__(self):
+        super().__init__()
+        self.consensus_extraction_lm = None
+        self.deviation_analysis_lm = None
+        self.cluster_validation_lm = None
+        self.report_generation_lm = None
+    
+    def set_consensus_extraction_lm(self, lm):
+        """Set LM for Phase 1: taxonomy extraction from reviews."""
+        self.consensus_extraction_lm = lm
+    
+    def set_deviation_analysis_lm(self, lm):
+        """Set LM for Phase 2: paper claim extraction and fit testing."""
+        self.deviation_analysis_lm = lm
+    
+    def set_cluster_validation_lm(self, lm):
+        """Set LM for Phase 3: stress cluster analysis and evolution proposals."""
+        self.cluster_validation_lm = lm
+    
+    def set_report_generation_lm(self, lm):
+        """Set LM for Phase 4: guidance generation and report writing."""
+        self.report_generation_lm = lm
 
 
 @dataclass
@@ -97,6 +134,7 @@ class SNSRunner:
         self.research_papers: List = []
         self.stress_clusters: List[StressCluster] = []
         self.evolution_proposal: Optional[EvolutionProposal] = None
+        self.reconstruction_scores: List = []  # ViewReconstructionScore list
         self.results: Optional[SNSResults] = None
     
     def run(
@@ -180,6 +218,15 @@ class SNSRunner:
                     self.baseline
                 )
                 
+                # Compute reconstruction scores for all views
+                logger.info("Computing reconstruction scores for all views...")
+                self.reconstruction_scores = self.phase3.compute_reconstruction_scores(
+                    self.baseline,
+                    self.stress_clusters,
+                    self.evolution_proposal
+                )
+                logger.info(f"Computed {len(self.reconstruction_scores)} reconstruction scores")
+                
                 if self.args.save_intermediate_results:
                     logger.info(f"Saving stress clusters to {clusters_path}")
                     with open(clusters_path, 'w') as f:
@@ -211,7 +258,8 @@ class SNSRunner:
                     fit_vectors=self.fit_vectors,
                     papers=self.research_papers,
                     clusters=self.stress_clusters,
-                    evolution_proposal=self.evolution_proposal
+                    evolution_proposal=self.evolution_proposal,
+                    reconstruction_scores=self.reconstruction_scores
                 )
                 
                 if self.args.save_intermediate_results:
@@ -244,7 +292,7 @@ class SNSRunner:
     
     def _retrieve_research_papers(self) -> List:
         """Retrieve research papers (non-review)."""
-        from ...interface import Information
+        from ..interface import Information
         
         logger.info("Retrieving research papers...")
         
@@ -314,13 +362,16 @@ class SNSRunner:
             topic=self.args.topic,
             main_axis=main_axis,
             aux_axis=aux_axis,
+            main_axis_mode=WritingMode.ANCHOR_PLUS_DELTA,  # Default mode
             outline=outline,
             evolution_summary=[],
             must_answer_questions=[
                 "What are the key organizational dimensions in existing reviews?",
                 "Which papers show structural stress?",
                 "What minimal changes are needed to accommodate new research?"
-            ]
+            ],
+            writing_rules=WritingRules(do=[], dont=[]),  # Empty rules for placeholder
+            reconstruction_scores=[]  # Empty scores for placeholder
         )
         
         return guidance

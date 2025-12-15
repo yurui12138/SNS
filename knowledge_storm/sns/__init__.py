@@ -15,6 +15,7 @@ Core Innovation:
 from .engine_v2 import (
     SNSRunner,
     SNSArguments,
+    SNSLMConfigs,
 )
 
 from .dataclass_v2 import (
@@ -97,6 +98,7 @@ __all__ = [
     # Engine
     "SNSRunner",
     "SNSArguments",
+    "SNSLMConfigs",
     
     # Core data structures
     "MultiViewBaseline",

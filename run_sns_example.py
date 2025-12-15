@@ -14,7 +14,7 @@ sys.path.insert(0, os.path.abspath(os.path.dirname(__file__)))
 from knowledge_storm.sns import (
     SNSRunner,
     SNSArguments,
-    IGFinderLMConfigs,
+    SNSLMConfigs,
 )
 from knowledge_storm.rm import ArxivSearchRM
 from knowledge_storm.lm import LitellmModel
@@ -88,7 +88,7 @@ def main():
     
     # Setup language models
     logger.info("Initializing language models...")
-    lm_configs = IGFinderLMConfigs()
+    lm_configs = SNSLMConfigs()
     
     openai_kwargs = {
         'api_key': api_key,

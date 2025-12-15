@@ -10,6 +10,7 @@ import re
 from typing import List, Dict, Optional
 from datetime import datetime
 import math
+import dspy
 
 from ...interface import Retriever, Information
 from ..dataclass import ReviewPaper
@@ -215,12 +216,13 @@ class TaxonomyViewExtractor:
             # Prepare input (limit text to avoid token limits)
             review_text = " ".join(review.snippets)[:10000]
             
-            # Call LLM with temperature=0
-            result = self.extractor(
-                review_title=review.title,
-                review_abstract=review.description,
-                review_text=review_text
-            )
+            # Call LLM with temperature=0 (wrap in dspy context)
+            with dspy.context(lm=self.lm):
+                result = self.extractor(
+                    review_title=review.title,
+                    review_abstract=review.description,
+                    review_text=review_text
+                )
             
             # Parse JSON output
             taxonomy_data = safe_json_loads(result.taxonomy_json)
@@ -382,13 +384,14 @@ class NodeDefinitionBuilder:
         context = self._extract_context(node.name, review_text)
         
         try:
-            # Call LLM
-            result = self.builder(
-                node_name=node.name,
-                node_path=node.path,
-                review_context=context,
-                parent_definition=parent_def
-            )
+            # Call LLM (wrap in dspy context)
+            with dspy.context(lm=self.lm):
+                result = self.builder(
+                    node_name=node.name,
+                    node_path=node.path,
+                    review_context=context,
+                    parent_definition=parent_def
+                )
             
             # Parse JSON
             def_data = safe_json_loads(result.definition_json)

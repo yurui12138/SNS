@@ -8,6 +8,7 @@ import logging
 import numpy as np
 from typing import List, Dict, Optional, Tuple, Set
 from collections import defaultdict
+import dspy
 
 try:
     import hdbscan
@@ -527,13 +528,14 @@ class EvolutionPlanner:
         cluster_innovations_text = self._extract_cluster_innovations(cluster, fit_vectors, view)
         
         try:
-            # Call LLM to generate new node
-            result = self.new_node_generator(
-                parent_node_name=parent_node.name,
-                parent_definition=view.node_definitions.get(parent_path, None),
-                cluster_papers=cluster_papers_text,
-                cluster_innovations=cluster_innovations_text
-            )
+            # Call LLM to generate new node (wrap in dspy context)
+            with dspy.context(lm=self.lm):
+                result = self.new_node_generator(
+                    parent_node_name=parent_node.name,
+                    parent_definition=view.node_definitions.get(parent_path, None),
+                    cluster_papers=cluster_papers_text,
+                    cluster_innovations=cluster_innovations_text
+                )
             
             # Parse result
             node_data = safe_json_loads(result.new_node_json)
