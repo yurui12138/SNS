@@ -17,7 +17,7 @@ from .dataclass import ResearchPaper, ReviewPaper
 from .dataclass_v2 import (
     MultiViewBaseline,
     FitVector,
-    IGFinder2Results,
+    SNSResults,
     DeltaAwareGuidance,
     StressCluster,
     EvolutionProposal,
@@ -31,7 +31,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
-class IGFinder2Arguments:
+class SNSArguments:
     """Arguments for IG-Finder 2.0 runner."""
     topic: str
     output_dir: str
@@ -43,7 +43,7 @@ class IGFinder2Arguments:
     lambda_regularization: float = 0.8
 
 
-class IGFinder2Runner:
+class SNSRunner:
     """
     Main runner for IG-Finder 2.0.
     
@@ -56,7 +56,7 @@ class IGFinder2Runner:
     
     def __init__(
         self,
-        args: IGFinder2Arguments,
+        args: SNSArguments,
         lm_configs: LMConfigs,
         rm: Retriever,
     ):
@@ -93,7 +93,7 @@ class IGFinder2Runner:
         self.research_papers: List = []
         self.stress_clusters: List[StressCluster] = []
         self.evolution_proposal: Optional[EvolutionProposal] = None
-        self.results: Optional[IGFinder2Results] = None
+        self.results: Optional[SNSResults] = None
     
     def run(
         self,
@@ -101,7 +101,7 @@ class IGFinder2Runner:
         do_phase2: bool = True,
         do_phase3: bool = True,
         do_phase4: bool = True,
-    ) -> IGFinder2Results:
+    ) -> SNSResults:
         """
         Run the complete IG-Finder 2.0 pipeline.
         
@@ -112,7 +112,7 @@ class IGFinder2Runner:
             do_phase4: Run Phase 4 (guidance generation)
             
         Returns:
-            IGFinder2Results object
+            SNSResults object
         """
         logger.info("="*80)
         logger.info("IG-FINDER 2.0: Multi-view Atlas Stress Test")
@@ -218,7 +218,7 @@ class IGFinder2Runner:
             delta_guidance = self._generate_simplified_guidance()
         
         # Assemble results
-        self.results = IGFinder2Results(
+        self.results = SNSResults(
             topic=self.args.topic,
             multiview_baseline=self.baseline,
             fit_vectors=self.fit_vectors,

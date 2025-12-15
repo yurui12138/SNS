@@ -971,7 +971,7 @@ class DeltaAwareGuidance:
 # ============================================================================
 
 @dataclass
-class IGFinder2Results:
+class SNSResults:
     """
     Complete results from IG-Finder 2.0 pipeline.
     """
@@ -997,7 +997,7 @@ class IGFinder2Results:
         }
     
     @classmethod
-    def from_dict(cls, data: Dict) -> IGFinder2Results:
+    def from_dict(cls, data: Dict) -> SNSResults:
         return cls(
             topic=data["topic"],
             multiview_baseline=MultiViewBaseline.from_dict(data["multiview_baseline"]),

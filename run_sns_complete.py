@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
 """
-Complete end-to-end example for IG-Finder 2.0
+SNS: Self-Nonself Modeling - Complete End-to-End Example
 
-This script demonstrates the full pipeline:
-1. Multi-view Baseline Construction
-2. Multi-view Stress Test
-3. Stress Clustering & Minimal Evolution
-4. Delta-aware Guidance Generation
+This script demonstrates the full SNS pipeline:
+1. Phase 1: Multi-view Baseline (Self Construction)
+2. Phase 2: Multi-view Stress Test (Nonself Identification)
+3. Phase 3: Stress Clustering & Evolution (Adaptation)
+4. Phase 4: Delta-aware Guidance Generation
 5. Evaluation Framework
 
 Usage:
-    python run_igfinder2_complete.py --topic "transformer neural networks" --output-dir ./output
+    python run_sns_complete.py --topic "transformer neural networks" --output-dir ./output
 
 Requirements:
     - OpenAI API key (or compatible endpoint)
@@ -28,9 +28,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 from knowledge_storm.lm import LitellmModel
 from knowledge_storm.rm import ArxivRM
-from knowledge_storm.ig_finder.engine_v2 import IGFinder2Runner, IGFinder2Arguments
+from knowledge_storm.sns.engine_v2 import SNSRunner, SNSArguments
 from knowledge_storm.interface import LMConfigs
-from knowledge_storm.ig_finder.evaluation import compute_all_metrics, print_metrics_report
+from knowledge_storm.sns.evaluation import compute_all_metrics, print_metrics_report
 
 # Set up logging
 logging.basicConfig(
@@ -41,12 +41,12 @@ logger = logging.getLogger(__name__)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Run IG-Finder 2.0 complete pipeline')
+    parser = argparse.ArgumentParser(description='Run SNS (Self-Nonself) complete pipeline')
     
     # Basic arguments
     parser.add_argument('--topic', type=str, required=True,
                        help='Research topic to analyze')
-    parser.add_argument('--output-dir', type=str, default='./igfinder2_output',
+    parser.add_argument('--output-dir', type=str, default='./sns_output',
                        help='Output directory for results')
     
     # API configuration
@@ -121,7 +121,7 @@ def main():
     rm = ArxivRM()
     
     # Create runner arguments
-    runner_args = IGFinder2Arguments(
+    runner_args = SNSArguments(
         topic=args.topic,
         output_dir=args.output_dir,
         top_k_reviews=args.top_k_reviews,
@@ -134,7 +134,7 @@ def main():
     
     # Create runner
     logger.info("Initializing IG-Finder 2.0 Runner...")
-    runner = IGFinder2Runner(
+    runner = SNSRunner(
         args=runner_args,
         lm_configs=lm_configs,
         rm=rm
