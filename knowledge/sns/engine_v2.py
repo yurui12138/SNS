@@ -73,15 +73,34 @@ class SNSLMConfigs(LMConfigs):
 
 @dataclass
 class SNSArguments:
-    """Arguments for SNS (Self-Nonself) runner."""
+    """
+    Arguments for SNS (Self-Nonself) runner.
+    
+    Updated to support API-based models (no GPU required).
+    """
     topic: str
     output_dir: str
     top_k_reviews: int = 15
     top_k_research_papers: int = 30
     min_cluster_size: int = 3
     save_intermediate_results: bool = True
-    embedding_model: str = "dummy"  # In production: "allenai/specter2"
     lambda_regularization: float = 0.8
+    
+    # Phase 2 Embedding Configuration (API-based)
+    embedding_model_type: str = "openai"  # "openai", "azure", or "fallback"
+    embedding_model_name: str = "text-embedding-ada-002"
+    embedding_api_key: Optional[str] = None  # Or set via OPENAI_API_KEY env var
+    embedding_api_base: Optional[str] = None
+    
+    # Phase 2 NLI Configuration (LLM-based or rule-based)
+    nli_model_type: str = "llm"  # "llm" or "rule-based"
+    nli_llm_model: str = "gpt-3.5-turbo"
+    nli_api_key: Optional[str] = None  # Or set via OPENAI_API_KEY env var
+    nli_api_base: Optional[str] = None
+    
+    # Phase 1 Compensatory View Configuration
+    enable_compensatory_views: bool = True
+    max_compensatory_views: int = 3
 
 
 class SNSRunner:
@@ -112,12 +131,21 @@ class SNSRunner:
         self.phase1 = Phase1Pipeline(
             retriever=rm,
             lm=lm_configs.consensus_extraction_lm,
-            top_k_reviews=args.top_k_reviews
+            top_k_reviews=args.top_k_reviews,
+            enable_compensatory=args.enable_compensatory_views,
+            max_compensatory_views=args.max_compensatory_views
         )
         
         self.phase2 = Phase2Pipeline(
             lm=lm_configs.deviation_analysis_lm,
-            embedding_model=args.embedding_model
+            embedding_model_type=args.embedding_model_type,
+            embedding_model_name=args.embedding_model_name,
+            embedding_api_key=args.embedding_api_key,
+            embedding_api_base=args.embedding_api_base,
+            nli_model_type=args.nli_model_type,
+            nli_llm_model=args.nli_llm_model,
+            nli_api_key=args.nli_api_key,
+            nli_api_base=args.nli_api_base
         )
         
         self.phase3 = Phase3Pipeline(
